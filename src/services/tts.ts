@@ -5,13 +5,19 @@
  */
 
 /** Android WebView 可能没有 Web Speech API, 在线播放不应依赖它。 */
-export const systemSpeechAvailable = () =>
+const webSpeechAvailable = () =>
   typeof speechSynthesis !== 'undefined' && typeof SpeechSynthesisUtterance !== 'undefined'
+export const systemSpeechAvailable = () => nativeTtsAvailable() || webSpeechAvailable()
 
 let voicesReady: Promise<SpeechSynthesisVoice[]> | null = null
 
 /** 部分平台 getVoices 首次调用为空, 需等 voiceschanged */
 export function getVoices(): Promise<SpeechSynthesisVoice[]> {
+  if (nativeTtsAvailable()) {
+    return listNativeVoices().then(voices => voices.filter(v => v.local).map(v => ({
+      name: v.id, voiceURI: v.id, lang: v.lang, localService: true, default: v.isDefault,
+    }))).catch(() => []) // 未安装引擎时面板仍可打开; 开始播放时给出明确错误。
+  }
   if (!systemSpeechAvailable()) return Promise.resolve([])
   if (!voicesReady) {
     voicesReady = new Promise(resolve => {
@@ -63,6 +69,16 @@ export interface SpeakOptions {
 
 /** 朗读一段文本; 缺少系统语音时 reject, 播放结束 / 出错 / 被取消时 resolve */
 export function speak(text: string, opts: SpeakOptions): Promise<'end' | 'cancelled'> {
+  if (nativeTtsAvailable()) {
+    const generation = speechGeneration
+    return nativeTtsSynthesize(text, opts.voice?.voiceURI || opts.voice?.name, opts.rate).then(
+      blob => generation === speechGeneration ? playAudio(blob) : 'cancelled',
+      error => {
+        if (generation !== speechGeneration || (error instanceof NativeTtsError && error.code === 'CANCELLED')) return 'cancelled'
+        throw error
+      },
+    )
+  }
   if (!systemSpeechAvailable()) return Promise.reject(new Error(t('tts.systemUnavailable')))
   return new Promise(resolve => {
     const utterance = new SpeechSynthesisUtterance(text)
@@ -104,6 +120,7 @@ import {
   edgeAvailable, edgePause, edgeResume, edgeStop, edgeSynthesize, playAudio,
 } from './edgeTts'
 import { isLocalCrashError, localPack, localTtsAvailable, localTtsSynthesize, localTtsWarmup } from './localTts'
+import { NativeTtsError, listNativeVoices, nativeTtsAvailable, nativeTtsStop, nativeTtsSynthesize } from './nativeTts'
 
 /** 神经引擎失败后本次会话回退系统语音, 避免每段都等超时 */
 let neuralFailed = false
@@ -162,7 +179,7 @@ export function splitSpeechText(text: string, maxLen = 80): string[] {
 }
 
 export interface NeuralEngine {
-  kind: 'edge' | 'local'
+  kind: 'edge' | 'local' | 'native'
   synth: (text: string) => Promise<Blob>
   /** 离线引擎: 单线程推理, 合成请求串行排队并按句切块 */
   local: boolean
@@ -171,6 +188,9 @@ export interface NeuralEngine {
 /** 当前设置下的神经合成器 (edge 在线 / local 离线); 不可用或本次会话已失败返回 null (用系统语音) */
 export function neuralEngine(): NeuralEngine | null {
   const settings = useSettings()
+  if (nativeTtsAvailable() && (settings.ttsEngine === 'system' || neuralFailed)) {
+    return { kind: 'native', local: true, synth: text => nativeTtsSynthesize(text, settings.ttsVoice, settings.ttsRate) }
+  }
   if (neuralFailed) return null
   if (settings.ttsEngine === 'edge' && edgeAvailable()) {
     return { kind: 'edge', local: false, synth: text => edgeSynthesize(text, settings.edgeVoice, settings.ttsRate) }
@@ -216,9 +236,24 @@ function warmLocal(): Promise<void> {
 }
 
 /** 提示合成失败, 返回能否回退系统语音; 没有备用引擎时保留下一次重试的机会。 */
-export function reportNeuralFailure(error: unknown): boolean {
+export async function reportNeuralFailure(
+  error: unknown, kind: NeuralEngine['kind'] = 'edge', alive: () => boolean = () => true,
+): Promise<boolean> {
   console.error(error)
-  const canFallback = systemSpeechAvailable()
+  if (kind === 'native') {
+    neuralFailed = false
+    toast(error instanceof NativeTtsError ? error.message : t('tts.nativeFailed'), 'error', 6000)
+    return false
+  }
+  let canFallback = webSpeechAvailable()
+  let nativeError: unknown
+  if (nativeTtsAvailable()) {
+    try {
+      if (!(await listNativeVoices()).some(v => v.local)) throw new NativeTtsError('NO_OFFLINE_VOICE')
+      canFallback = true
+    } catch (e) { nativeError = e; canFallback = false }
+  }
+  if (!alive()) return false
   if (neuralFailed) return canFallback
   neuralFailed = canFallback
   if (isLocalCrashError(error)) {
@@ -226,7 +261,8 @@ export function reportNeuralFailure(error: unknown): boolean {
     toast(t('tts.localCrashedPaused'), 'error', 8000)
     return canFallback
   }
-  toast(t(canFallback ? 'tts.neuralUnavailable' : 'tts.neuralUnavailableNoFallback'), 'error', 4000)
+  toast(!canFallback && nativeError instanceof NativeTtsError ? nativeError.message
+    : t(canFallback ? nativeTtsAvailable() ? 'tts.nativeFallback' : 'tts.neuralUnavailable' : 'tts.neuralUnavailableNoFallback'), 'error', 4000)
   return canFallback
 }
 
@@ -316,14 +352,14 @@ function enqueue(engine: NeuralEngine, text: string, priority: number): CacheEnt
 
 const synthCache = new Map<string, CacheEntry>()
 const MAX_CACHE = 32
-const cacheKey = (text: string) => {
+const cacheKey = (text: string, kind: NeuralEngine['kind']) => {
   const s = useSettings()
-  return `${s.ttsEngine}|${s.edgeVoice}|${s.localVoiceId}|${s.ttsRate}|${text}`
+  return `${kind}|${s.ttsEngine}|${s.edgeVoice}|${s.localVoiceId}|${s.ttsVoice}|${s.ttsRate}|${text}`
 }
 
 /** 取 (或发起) 一块文本的合成; priority 越小越先合成 */
 function requestSynth(engine: NeuralEngine, text: string, priority: number): CacheEntry {
-  const key = cacheKey(text)
+  const key = cacheKey(text, engine.kind)
   let entry = synthCache.get(key)
   if (entry) {
     if (entry.job && entry.job.priority > priority) entry.job.priority = priority
@@ -394,7 +430,7 @@ export async function speakText(text: string): Promise<'end' | 'cancelled'> {
     try {
       for (; index < parts.length; index++) {
         const blob = await entries[index].promise
-        synthCache.delete(cacheKey(parts[index]))
+        synthCache.delete(cacheKey(parts[index], engine.kind))
         if (generation !== speechGeneration) return 'cancelled'
         await waitWhileSpeechPaused()
         if (generation !== speechGeneration) return 'cancelled'
@@ -404,9 +440,12 @@ export async function speakText(text: string): Promise<'end' | 'cancelled'> {
       return 'end'
     } catch (e) {
       if (generation !== speechGeneration || e instanceof SpeechCancelled) return 'cancelled'
-      if (!reportNeuralFailure(e)) throw e
+      const canFallback = await reportNeuralFailure(e, engine.kind, () => generation === speechGeneration)
+      if (generation !== speechGeneration) return 'cancelled'
+      if (!canFallback) throw e
       // 只用系统语音补读尚未播放的部分
       remaining = parts.slice(index).join(' ') || text
+      if (nativeTtsAvailable()) return speakText(remaining)
     }
   }
   const voice = await pickVoice(settings.ttsVoice, remaining)
@@ -428,6 +467,7 @@ export function resumeSpeech() {
 
 export function stopSpeech() {
   speechGeneration++
+  nativeTtsStop()
   edgeStop()
   stopSpeaking()
   // 未开始的合成直接丢弃; 正在推理的一块无法中断, 让新会话不必排在它后面 (Rust 侧锁会串行)
