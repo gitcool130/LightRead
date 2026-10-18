@@ -16,6 +16,7 @@ import { getStorage } from '../../storage'
 import { useSettings } from '../../stores/settings'
 import { useLibrary } from '../../stores/library'
 import { t } from '../../i18n'
+import { AUTO_SYNC_INTERVAL_MS, createAutoSyncScheduler } from './scheduler.ts'
 
 const STATE_KEY = 'lightread-sync-state'
 
@@ -128,6 +129,7 @@ export async function syncNow(): Promise<SyncResult> {
     syncState.message = ''
     try {
       if (!syncConfigured()) throw new Error(t('sync.err.notConfigured'))
+      autoScheduler.recordAttempt()
       const library = useLibrary()
       const storage = await getStorage()
       let result: SyncResult | null = null
@@ -182,47 +184,52 @@ export async function syncNow(): Promise<SyncResult> {
   }
 }
 
-const AUTO_DEBOUNCE_MS = 3000
-const AUTO_INTERVAL_MS = 5 * 60 * 1000
-let autoTimer: ReturnType<typeof setTimeout> | null = null
+const SCHEDULE_KEY = 'lightread-sync-schedule'
+const autoScheduler = createAutoSyncScheduler({
+  now: () => Date.now(),
+  enabled: () => {
+    try { return useSettings().webdavSyncAuto && syncConfigured() }
+    catch { return false } // pinia 未就绪
+  },
+  online: () => typeof navigator === 'undefined' || navigator.onLine !== false,
+  readNextAt: () => {
+    try {
+      const saved = Number(localStorage.getItem(SCHEDULE_KEY))
+      if (Number.isFinite(saved) && saved > 0) return saved
+    } catch { /* 无法持久化时仍在本次会话中限频 */ }
+    return syncState.lastSyncAt > 0 ? syncState.lastSyncAt + AUTO_SYNC_INTERVAL_MS : 0
+  },
+  writeNextAt: at => {
+    try { localStorage.setItem(SCHEDULE_KEY, String(at)) }
+    catch { /* 无法持久化时仍在本次会话中限频 */ }
+  },
+  run: syncNow,
+  setTimer: (callback, delay) => setTimeout(callback, delay),
+  clearTimer: timer => clearTimeout(timer),
+})
 
-/** 自动同步请求 (开启自动同步且已配置时才执行; 防抖, 错误只写 syncState 不抛出) */
-export function requestAutoSync(reason: string): void {
-  try {
-    if (!useSettings().webdavSyncAuto || !syncConfigured()) return
-  } catch {
-    return // pinia 未就绪
-  }
-  if (typeof navigator !== 'undefined' && navigator.onLine === false) return
-  if (autoTimer) clearTimeout(autoTimer)
-  // 切到后台时页面随时可能被挂起, 立即执行
-  const delay = reason === 'hidden' ? 0 : AUTO_DEBOUNCE_MS
-  autoTimer = setTimeout(() => {
-    autoTimer = null
-    syncNow().catch(() => { /* 已写入 syncState.lastError */ })
-  }, delay)
+/** 所有自动入口共用 6 小时间隔; 设置变更、退出阅读或切后台不会绕过它。 */
+export function requestAutoSync(_reason: string): void {
+  autoScheduler.request()
 }
 
-/** 安装自动同步 (启动时一次、visibilitychange 到 hidden、每 5 分钟); 返回卸载函数 */
+/** 到期自动同步; 后台挂起时，在重新进入前台或恢复网络后检查是否到期。 */
 export function startAutoSync(): () => void {
-  const onVisibility = () => {
-    if (document.visibilityState === 'hidden') requestAutoSync('hidden')
-  }
-  let interval: ReturnType<typeof setInterval> | undefined
+  const onVisibility = () => requestAutoSync('visibility')
+  const onOnline = () => requestAutoSync('online')
   try {
     document.addEventListener('visibilitychange', onVisibility)
-    interval = setInterval(() => requestAutoSync('interval'), AUTO_INTERVAL_MS)
-    requestAutoSync('start')
+    window.addEventListener('online', onOnline)
+    window.addEventListener('offline', onOnline)
+    autoScheduler.start()
   } catch (err) {
     syncState.lastError = err instanceof Error ? err.message : String(err)
   }
   return () => {
     document.removeEventListener('visibilitychange', onVisibility)
-    if (interval) clearInterval(interval)
-    if (autoTimer) {
-      clearTimeout(autoTimer)
-      autoTimer = null
-    }
+    window.removeEventListener('online', onOnline)
+    window.removeEventListener('offline', onOnline)
+    autoScheduler.stop()
   }
 }
 

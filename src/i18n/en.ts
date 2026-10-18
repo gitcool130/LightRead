@@ -459,7 +459,7 @@ export default {
 
   // ---- 同步 ----
   'sync.auto': 'Auto sync',
-  'sync.autoHint': "Keep your reading progress, notes, bookmarks and booklists up to date across devices",
+  'sync.autoHint': 'Sync automatically every 6 hours, or manually at any time',
   'sync.files': 'Sync book files',
   'sync.filesHint': "Read the same books on your other devices without adding them again",
   'sync.now': 'Sync now',

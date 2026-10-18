@@ -459,7 +459,7 @@ export default {
 
   // ---- 同步 ----
   'sync.auto': '自动同步',
-  'sync.autoHint': '换台设备，接着上次的进度和笔记继续读',
+  'sync.autoHint': '每 6 小时自动同步，可随时手动同步',
   'sync.files': '同步书籍文件',
   'sync.filesHint': '其他设备也能下载同一本书，接着读',
   'sync.now': '立即同步',
