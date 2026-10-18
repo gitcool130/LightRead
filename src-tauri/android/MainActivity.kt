@@ -32,6 +32,8 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 
 class MainActivity : TauriActivity() {
+  private var nativeTts: NativeTtsBridge? = null
+
   @Volatile
   private var insetsJson = "{\"top\":0,\"right\":0,\"bottom\":0,\"left\":0}"
 
@@ -44,6 +46,10 @@ class MainActivity : TauriActivity() {
   override fun onWebViewCreate(webView: WebView) {
     webView.addJavascriptInterface(InsetsBridge(), "LightReadInsets")
     webView.addJavascriptInterface(UpdaterBridge(), "LightReadUpdater")
+    nativeTts?.shutdown()
+    nativeTts = NativeTtsBridge(this, webView).also {
+      webView.addJavascriptInterface(it, "LightReadNativeTts")
+    }
 
     ViewCompat.setOnApplyWindowInsetsListener(webView) { view, insets ->
       val bars = insets.getInsets(
@@ -58,6 +64,12 @@ class MainActivity : TauriActivity() {
       ViewCompat.onApplyWindowInsets(view, insets)
     }
     ViewCompat.requestApplyInsets(webView)
+  }
+
+  override fun onDestroy() {
+    nativeTts?.shutdown()
+    nativeTts = null
+    super.onDestroy()
   }
 
   private var barsDark: Boolean? = null
