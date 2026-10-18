@@ -66,9 +66,10 @@ export interface ChunkProfile {
  * (2026-10-05 真机实测: 原先 120 字一块, 长段里每一两句就切一次, 每块独立合成都带「句终」语调,
  *  接缝处再裁静音 + 插停顿, 听感就是句与句之间卡一下。)
  */
-export const CHUNK_PROFILES: Record<'edge' | 'local', ChunkProfile> = {
+export const CHUNK_PROFILES: Record<'edge' | 'local' | 'native', ChunkProfile> = {
   edge: { firstMax: 60, target: 500, max: 600, minParagraph: 16 },
   local: { firstMax: 30, target: 100, max: 160, minParagraph: 12 },
+  native: { firstMax: 40, target: 120, max: 180, minParagraph: 12 },
 }
 
 /**

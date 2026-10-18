@@ -331,6 +331,11 @@ const env = {
   speechQueue: [],
   maxSpeechQueue: 0,
   elementsPlayed: 0,
+  nativeAvailable: false,
+  nativeCalls: [],
+  nativeInFlight: 0,
+  nativeMaxInFlight: 0,
+  nativeSynth: async text => new Blob([text]),
 }
 globalThis.__listenEnv = env
 
@@ -469,6 +474,16 @@ const mocks = {
     export const localTtsSynthesize = ${fakeSynth};
     export const localPack = { crashed: false };
     export const isLocalCrashError = () => false`,
+  './nativeTts': `export class NativeTtsError extends Error { constructor(code) { super(code); this.code = code } }
+    export const nativeTtsAvailable = () => globalThis.__listenEnv.nativeAvailable;
+    export const listNativeVoices = async () => [{ id: 'zh-local', name: 'zh-local', lang: 'zh-CN', local: true, isDefault: true }];
+    export const nativeTtsStop = () => {};
+    export const nativeTtsSynthesize = async (...args) => {
+      const env = globalThis.__listenEnv;
+      env.nativeCalls.push(args); env.nativeInFlight++;
+      env.nativeMaxInFlight = Math.max(env.nativeMaxInFlight, env.nativeInFlight);
+      try { return await env.nativeSynth(...args) } finally { env.nativeInFlight-- }
+    }`,
 }
 const hook = registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -496,6 +511,11 @@ function resetEnv(engine = 'edge') {
   env.speechQueue.length = 0
   env.maxSpeechQueue = 0
   env.elementsPlayed = 0
+  env.nativeAvailable = false
+  env.nativeCalls.length = 0
+  env.nativeInFlight = 0
+  env.nativeMaxInFlight = 0
+  env.nativeSynth = async text => new Blob([text])
 }
 
 function makePlayer() {
@@ -803,4 +823,73 @@ test('播放器: 选择不可用的系统语音时报告明确错误', async () 
     globalThis.speechSynthesis = synthesis
     globalThis.SpeechSynthesisUtterance = utterance
   }
+})
+
+test('播放器: Android 原生系统语音串行合成, 使用音频时间线暂停和继续', async () => {
+  resetEnv('system')
+  env.nativeAvailable = true
+  env.nativeSynth = async text => { await tick(2); return new Blob([text]) }
+  const synthesis = globalThis.speechSynthesis
+  const utterance = globalThis.SpeechSynthesisUtterance
+  const { player, log } = makePlayer()
+  const sentences = book(12)
+  delete globalThis.speechSynthesis
+  delete globalThis.SpeechSynthesisUtterance
+  try {
+    player.play(makeFeed(sentences))
+    await until(() => log.keys.length >= 2)
+    player.pause()
+    await tick(20)
+    const count = log.keys.length
+    await tick(80)
+    assert.equal(log.keys.length, count)
+    assert.equal(player.state, 'paused')
+    player.resume()
+    assert.equal((await log.done).reason, 'finished')
+    assert.deepEqual(log.keys, sentences.map(s => s.key))
+    assert.equal(env.nativeMaxInFlight, 1)
+    assert.ok(env.sources.length > 1)
+    assert.equal(env.synthCalls.length, 0)
+    assert.deepEqual(env.spoken, [])
+  } finally {
+    player.stop()
+    globalThis.speechSynthesis = synthesis
+    globalThis.SpeechSynthesisUtterance = utterance
+  }
+})
+
+test('播放器: 在线失败后原生 WAV 补读剩余内容, 不丢句不重复', async () => {
+  resetEnv('edge')
+  env.nativeAvailable = true
+  let count = 0
+  env.synth = async text => { if (++count > 1) throw new Error('online unavailable'); return new Blob([text]) }
+  const { player, log } = makePlayer()
+  const sentences = book(15)
+  player.play(makeFeed(sentences))
+  assert.equal((await log.done).reason, 'finished')
+  assert.deepEqual(log.keys, sentences.map(s => s.key))
+  assert.ok(env.nativeCalls.length > 0)
+  assert.equal(env.nativeMaxInFlight, 1)
+  assert.deepEqual(env.spoken, [])
+  assert.deepEqual(env.notices.map(n => n[0]), ['tts.nativeFallback'])
+})
+
+test('播放器: 原生引擎失败不循环回退, 修复语音服务后可重试', async () => {
+  resetEnv('system')
+  env.nativeAvailable = true
+  const failure = new Error('native engine failed')
+  env.nativeSynth = async () => { throw failure }
+  const { player, log } = makePlayer()
+  const sentences = [S('a', '重试原生语音。', { sectionEnd: true })]
+  player.play(makeFeed(sentences))
+  const end = await log.done
+  assert.equal(end.reason, 'error')
+  assert.equal(end.error, failure)
+  assert.equal(env.nativeCalls.length, 1)
+  assert.deepEqual(env.notices.map(n => n[0]), ['tts.nativeFailed'])
+  env.nativeSynth = async text => new Blob([text])
+  player.play(makeFeed(sentences))
+  await until(() => log.ends.length === 2)
+  assert.deepEqual(log.ends, ['error', 'finished'])
+  assert.deepEqual(log.keys, ['a'])
 })

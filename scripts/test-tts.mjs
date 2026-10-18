@@ -12,6 +12,11 @@ const state = {
   dismissed: 0,
   spoken: [],
   notices: [],
+  nativeAvailable: false,
+  nativeVoices: [{ id: 'zh-local', name: 'zh-local', lang: 'zh-CN', local: true, isDefault: true }],
+  nativeCalls: [],
+  nativeSynth: async text => new Blob([text]),
+  nativeVoiceQuery: null,
 }
 globalThis.__ttsTest = state
 globalThis.speechSynthesis = {
@@ -42,6 +47,14 @@ const modules = {
     export const edgeStop = () => {};
     export const edgeSynthesize = (...args) => globalThis.__ttsTest.synthesize(...args);
     export const playAudio = async blob => { globalThis.__ttsTest.played.push(blob); return globalThis.__ttsTest.play(blob) }`,
+  './nativeTts': `export class NativeTtsError extends Error { constructor(code) { super(code); this.code = code } }
+    export const nativeTtsAvailable = () => globalThis.__ttsTest.nativeAvailable;
+    export const listNativeVoices = async () => globalThis.__ttsTest.nativeVoiceQuery
+      ? globalThis.__ttsTest.nativeVoiceQuery() : globalThis.__ttsTest.nativeVoices;
+    export const nativeTtsStop = () => {};
+    export const nativeTtsSynthesize = (...args) => {
+      globalThis.__ttsTest.nativeCalls.push(args); return globalThis.__ttsTest.nativeSynth(...args)
+    }`,
 }
 const hook = registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -62,6 +75,10 @@ function reset() {
   stopSpeech()
   resetEdgeFailure()
   state.settings.ttsEngine = 'local'
+  state.nativeAvailable = false
+  state.nativeCalls.length = 0
+  state.nativeSynth = async text => new Blob([text])
+  state.nativeVoiceQuery = null
   state.played.length = 0
   state.spoken.length = 0
   state.notices.length = 0
@@ -338,4 +355,98 @@ test('available system speech still handles online failure for the rest of the s
   assert.deepEqual(state.spoken, ['第一段。', '第二段。'])
   assert.deepEqual(state.notices.map(n => n[0]), ['tts.neuralUnavailable'])
   assert.equal(calls, 1, 'working system fallback avoids repeated network failures')
+})
+
+test('Android system voices drive PDF playback and direct voice audition without Web Speech', async () => {
+  reset()
+  state.nativeAvailable = true
+  state.settings.ttsEngine = 'system'
+  state.settings.ttsVoice = 'zh-local'
+  const synthesis = globalThis.speechSynthesis
+  const utterance = globalThis.SpeechSynthesisUtterance
+  delete globalThis.speechSynthesis
+  delete globalThis.SpeechSynthesisUtterance
+  try {
+    const voices = await listVoicesSorted()
+    assert.equal(voices[0].name, 'zh-local')
+    assert.equal(voices[0].voiceURI, 'zh-local')
+    assert.equal(await speakText('PDF 原生朗读。'), 'end')
+    assert.equal(await speak('试听内容。', { voice: voices[0], rate: 1.5 }), 'end')
+    assert.deepEqual(state.nativeCalls, [['PDF 原生朗读。', 'zh-local', 1], ['试听内容。', 'zh-local', 1.5]])
+    assert.deepEqual(await Promise.all(state.played.map(blob => blob.text())), ['PDF 原生朗读。', '试听内容。'])
+    assert.deepEqual(state.spoken, [])
+    const gate = Promise.withResolvers()
+    state.nativeSynth = () => gate.promise
+    const audition = speak('取消试听。', { rate: 1 })
+    stopSpeech()
+    gate.resolve(new Blob(['取消试听。']))
+    assert.equal(await audition, 'cancelled')
+    assert.equal(state.played.length, 2)
+  } finally {
+    globalThis.speechSynthesis = synthesis
+    globalThis.SpeechSynthesisUtterance = utterance
+    state.settings.ttsVoice = ''
+  }
+})
+
+test('PDF online failure falls back to native WAV and keeps engine caches separate', async () => {
+  reset()
+  state.nativeAvailable = true
+  state.settings.ttsEngine = 'edge'
+  let edgeCalls = 0
+  state.synthesize = async () => { edgeCalls++; throw new Error('online unavailable') }
+  assert.equal(await speakText('同一段内容。'), 'end')
+  assert.equal(await speakText('下一段内容。'), 'end')
+  assert.equal(edgeCalls, 1)
+  assert.deepEqual(state.nativeCalls.map(args => args[0]), ['同一段内容。', '下一段内容。'])
+  assert.deepEqual(await Promise.all(state.played.map(blob => blob.text())), ['同一段内容。', '下一段内容。'])
+  assert.deepEqual(state.notices.map(n => n[0]), ['tts.nativeFallback'])
+  assert.deepEqual(state.spoken, [])
+})
+
+test('native PDF synthesis failure ends once and can be retried', async () => {
+  reset()
+  state.nativeAvailable = true
+  state.settings.ttsEngine = 'system'
+  const failure = new Error('native engine failed')
+  state.nativeSynth = async () => { throw failure }
+  await assert.rejects(speakText('重试内容。'), e => e === failure)
+  assert.equal(state.nativeCalls.length, 1, 'native failure must not loop back into itself')
+  assert.deepEqual(state.notices.map(n => n[0]), ['tts.nativeFailed'])
+  state.nativeSynth = async text => new Blob([text])
+  assert.equal(await speakText('重试内容。'), 'end')
+  assert.equal(state.nativeCalls.length, 2)
+})
+
+test('native fallback requires an installed offline voice and does not claim success without one', async () => {
+  reset()
+  state.nativeAvailable = true
+  state.settings.ttsEngine = 'edge'
+  state.nativeVoiceQuery = async () => []
+  const failure = new Error('online unavailable')
+  state.synthesize = async () => { throw failure }
+  await assert.rejects(speakText('没有备用音色。'), e => e === failure)
+  assert.deepEqual(state.notices.map(n => n[0]), ['NO_OFFLINE_VOICE'])
+  assert.equal(state.nativeCalls.length, 0)
+  assert.deepEqual(state.spoken, [])
+})
+
+test('stopping while native voice discovery waits cannot redirect a new online session', async () => {
+  reset()
+  state.nativeAvailable = true
+  state.settings.ttsEngine = 'edge'
+  const voices = Promise.withResolvers()
+  state.nativeVoiceQuery = () => voices.promise
+  state.synthesize = async () => { throw new Error('old online failure') }
+  const old = speakText('旧会话。')
+  await tick()
+  stopSpeech()
+  resetEdgeFailure()
+  state.synthesize = async text => new Blob([text])
+  assert.equal(await speakText('新会话。'), 'end')
+  voices.resolve(state.nativeVoices)
+  assert.equal(await old, 'cancelled')
+  assert.equal(await speakText('继续在线。'), 'end')
+  assert.equal(state.nativeCalls.length, 0)
+  assert.deepEqual(state.notices, [])
 })
