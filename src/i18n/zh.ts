@@ -1036,6 +1036,11 @@ export default {
   'tts.neuralUnavailable': '这个音色暂时用不了，已换成系统语音',
   'tts.neuralUnavailableNoFallback': '语音暂时不可用，此设备没有备用系统语音，请检查网络后重试',
   'tts.systemUnavailable': '此设备不支持系统语音，请选择在线语音',
+  'tts.nativeNoEngine': '未找到系统语音引擎，请在 Android 设置中安装或启用文字转语音服务',
+  'tts.nativeFallback': '当前语音暂不可用，正在尝试系统语音',
+  'tts.nativeNoVoice': '系统语音缺少所需的离线音色，请在 Android 文字转语音设置中下载语音数据',
+  'tts.nativeTimeout': '系统语音合成超时，请重试或更换语音引擎',
+  'tts.nativeFailed': '系统语音合成失败，请检查语音引擎及语音数据后重试',
   'tts.localLoading': '正在准备离线语音，第一次大约需要 10–20 秒…',
 
   // ---- 阅读模式 ----

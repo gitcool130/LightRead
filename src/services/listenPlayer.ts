@@ -16,6 +16,7 @@
  * - 神经引擎失败: 已排上的音频照常播完, 余下 (含失败块) 改用系统语音, 与 tts.ts 一致只提示一次。
  */
 import { neuralEngine, pickVoice, reportNeuralFailure, type NeuralEngine } from './tts.ts'
+import { nativeTtsStop } from './nativeTts'
 import { useSettings } from '../stores/settings'
 import {
   CHUNK_PROFILES, analyzeSpeech, chunkGain, chunkWeight, estimateSeconds, gapSeconds, nextStartTime,
@@ -55,6 +56,7 @@ export type ListenState = 'idle' | 'playing' | 'paused' | 'buffering'
 const PIPELINE: Record<NeuralEngine['kind'], { concurrency: number; lookaheadSeconds: number; maxChunks: number }> = {
   edge: { concurrency: 2, lookaheadSeconds: 45, maxChunks: 8 },
   local: { concurrency: 1, lookaheadSeconds: 90, maxChunks: 12 },
+  native: { concurrency: 1, lookaheadSeconds: 30, maxChunks: 4 },
 }
 /** 提前排进 AudioContext 时间线的秒数 (排上的音频不依赖 JS 定时器) */
 const SCHEDULE_AHEAD = 15
@@ -264,6 +266,7 @@ export class ListenPlayer {
    */
   private halt(release = false) {
     this.session++
+    nativeTtsStop()
     this.restoreVolume()
     this.active = false
     this.paused = false
@@ -387,7 +390,9 @@ export class ListenPlayer {
           if (e instanceof FeedError) throw e
           if (!alive()) continue
           // 合成 / 播放失败: 系统语音可用时补读余下内容, 否则保留原错误并结束。
-          if (!reportNeuralFailure(e)) throw e
+          const canFallback = await reportNeuralFailure(e, engine.kind, alive)
+          if (!alive()) continue
+          if (!canFallback) throw e
           switching = true
           const back = e instanceof PlaybackError ? [...e.chunk.sentences] : []
           this.heldChunk = null

@@ -1036,6 +1036,11 @@ export default {
   'tts.neuralUnavailable': "This voice is unavailable. System voice is now on",
   'tts.neuralUnavailableNoFallback': 'Speech is unavailable and this device has no system voice fallback. Check your connection and retry',
   'tts.systemUnavailable': 'System speech is unavailable on this device. Choose an online voice',
+  'tts.nativeNoEngine': 'No system speech engine was found. Install or enable a text-to-speech service in Android settings',
+  'tts.nativeFallback': 'This voice is unavailable. Trying the system speech engine',
+  'tts.nativeNoVoice': 'The required offline voice is missing. Download voice data in Android text-to-speech settings',
+  'tts.nativeTimeout': 'System speech synthesis timed out. Retry or choose another speech engine',
+  'tts.nativeFailed': 'System speech synthesis failed. Check the speech engine and voice data, then retry',
   'tts.localLoading': "Getting offline voice ready, about 10–20 seconds the first time…",
 
   // ---- 阅读模式 ----
