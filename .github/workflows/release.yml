@@ -1,20 +1,154 @@
 name: Release
 
-# This maintenance branch publishes only the final App 1.x release.
-# The desktop/full-platform workflow remains unchanged on main.
+# Complete the immutable v1.20.0 release without replacing its verified APK.
 on:
   workflow_dispatch:
     inputs:
       tag:
         type: string
         required: true
-
+        default: v1.20.0
+defaults:
+  run:
+    shell: bash
 permissions:
-  contents: write
-
+  contents: read
+concurrency:
+  group: release-v1.20.0
+  cancel-in-progress: false
 jobs:
-  app:
-    uses: ./.github/workflows/release-mobile.yml
-    with:
-      tag: ${{ inputs.tag }}
-    secrets: inherit
+  preflight:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Require the final 1.x tag
+        env:
+          TAG: ${{ inputs.tag }}
+        run: test "$TAG" = v1.20.0
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+      - name: Save fixed build and verification helpers
+        shell: bash
+        run: cp scripts/{prepare-desktop-1.20,collect-desktop-1.20,check-release,apk-layout}.mjs "$RUNNER_TEMP/"
+      - uses: actions/checkout@v4
+        with:
+          ref: v1.20.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apply audited version metadata
+        shell: bash
+        run: |
+          node "$RUNNER_TEMP/prepare-desktop-1.20.mjs"
+          node "$RUNNER_TEMP/check-release.mjs" --tag v1.20.0
+      - run: npm ci
+      - run: |
+          node "$RUNNER_TEMP/check-release.mjs" --self-test
+          npm run test:book-sources
+          npm run test:epub-compat
+          npm run test:tts
+          npm run test:updater
+          npm run test:paper-agent
+  desktop:
+    needs: preflight
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: mac-arm64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            args: --target aarch64-apple-darwin
+          - id: mac-x64
+            os: macos-latest
+            target: x86_64-apple-darwin
+            args: --target x86_64-apple-darwin
+          - id: windows
+            os: windows-latest
+            target: ''
+            args: --bundles nsis
+          - id: linux
+            os: ubuntu-22.04
+            target: ''
+            args: ''
+    runs-on: ${{ matrix.os }}
+    env:
+      RELEASE_WORKFLOW_SHA: ${{ github.workflow_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+      - name: Save fixed build and verification helpers
+        shell: bash
+        run: cp scripts/{prepare-desktop-1.20,collect-desktop-1.20,check-release,apk-layout}.mjs "$RUNNER_TEMP/"
+      - uses: actions/checkout@v4
+        with:
+          ref: v1.20.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apply audited version metadata
+        shell: bash
+        run: |
+          node "$RUNNER_TEMP/prepare-desktop-1.20.mjs"
+          node "$RUNNER_TEMP/check-release.mjs" --tag v1.20.0
+      - name: Install native dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev cmake rpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          cache-targets: false
+      - run: npm ci
+      - name: Native regression checks
+        if: runner.os != 'Linux'
+        run: |
+          cargo test --locked --manifest-path src-tauri/Cargo.toml agent
+          cargo test --locked --manifest-path src-tauri/Cargo.toml background_process
+          cargo test --locked --manifest-path src-tauri/Cargo.toml local_tts::desktop::tests::engine_task
+      - name: Build native installers
+        run: npx tauri build ${{ matrix.args }}
+      - name: Verify package versions and collect artifacts
+        shell: bash
+        run: node "$RUNNER_TEMP/collect-desktop-1.20.mjs" '${{ matrix.id }}' '${{ matrix.target }}'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.id }}
+          path: desktop-assets/*
+          if-no-files-found: error
+  rust-floor:
+    needs: preflight
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+      - name: Save fixed build and verification helpers
+        shell: bash
+        run: cp scripts/{prepare-desktop-1.20,collect-desktop-1.20,check-release,apk-layout}.mjs "$RUNNER_TEMP/"
+      - uses: actions/checkout@v4
+        with:
+          ref: v1.20.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apply audited version metadata
+        shell: bash
+        run: |
+          node "$RUNNER_TEMP/prepare-desktop-1.20.mjs"
+          node "$RUNNER_TEMP/check-release.mjs" --tag v1.20.0
+      - name: Install native dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev cmake rpm
+      - uses: dtolnay/rust-toolchain@1.87.0
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: cargo check --locked --manifest-path src-tauri/Cargo.toml

@@ -1,7 +1,11 @@
 # v1.20.0
 
-App 1.x 最终版，沿用 v1.19.4 功能和界面；仅 App 版本推进到 1.20.0。桌面代码与基础版本保持 1.19.4。Android / iOS 版本由各自 Tauri 平台配置覆盖，前端按原生目标显示对应版本。
+1.x 系列全平台最终版，沿用 v1.19.4 的界面和功能。Android、Windows、macOS Apple Silicon / Intel、Linux 的包内版本统一为 1.20.0。桌面不引入 App 2.0 改版；后续 App 2.0 在 `Dev` 分支开发。
 
-Android 清理打包输出后从本标签重新构建，避免增量 ZIP 留下大块无效填充。沿用 `com.yzfly.lightread.debug`、arm64 debug、原固定签名、minSdk 24 和 targetSdk 36；不清空用户数据。
+Android 清理打包输出后重新构建，避免增量 ZIP 留下无效填充；APK 73,329,880 字节。沿用 `com.yzfly.lightread.debug`、arm64 debug、原固定签名、minSdk 24 和 targetSdk 36。K30 覆盖安装验证了版本、33 本真实藏书、阅读进度与设置保留；默认在线语音，既有用户保留自己的设置。
 
-发版用 `Release App` 工作流校验本地候选 APK：源码提交、平台版本、签名、ABI、ZIP 空洞和全部 SHA256 必须通过才公开。Release 标题只写 `v1.20.0`。这是仅包含 App 资产的版本，`latest=false` 避免旧桌面更新器收到没有桌面安装包的版本；桌面 latest 保持 v1.19.4。后续 App 2.0 发布前需完成独立 App 更新通道。
+已公开的 v1.20.0 标签 `1f65e15` 不移动。其桌面基础版本原为 1.19.4；为补齐桌面安装包，构建时仅对 package.json、package-lock.json、Cargo.toml、Cargo.lock、tauri.conf.json 的六处版本元数据应用严格审计的 1.20.0 补丁。应用源码、依赖、标识和界面不改。Release 附 `desktop-version.patch`、各平台 `.build.json` 与完整 `SHA256SUMS`，可追溯原始标签、构建流程提交和补丁摘要。
+
+桌面构建流程先保留 Actions 产物；原生包版本、平台回归、Rust 1.87 检查全部通过后才补入现有 Release 并设置 latest。复用已验证 Android 包，不重写或替换。标题只用 `v1.20.0`。
+
+Android 仍为实验版；本版封存现有 1.x 听书实现，在线语音服务的协议兼容修复继续在 App 2.0 候选版验证，不宣称本版已解决所有语音播放失败。

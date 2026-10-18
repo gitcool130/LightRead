@@ -1,6 +1,10 @@
-# App 1.x 最终版补充（2026-10-17）
+# 1.x 最终版发布补充（2026-10-17）
 
-v1.20.0 仅升级 App 版本；桌面基础版本和界面保持 1.19.4。移动版本写在 `tauri.android.conf.json` / `tauri.ios.conf.json`，检查须带 `--platform android`。App 发版走 `release-mobile.yml`，仅发布验证过的 APK 与校验文件，不使用下面旧的全平台流程，不改变桌面 latest。Release 标题只用版本号。
+用户已明确 v1.20.0 为全平台最终版：Android、Windows、macOS arm64/x64、Linux 均发布；桌面只升级版本元数据，界面和功能保持原样。封存分支 `release/1.20.0`，后续 App 2.0 在 `Dev` 开发。
+
+已公开的 v1.20.0 tag 保持 `1f65e15` 不移动，已验证 APK 不替换。桌面补包从该 tag 检出后，使用 `scripts/prepare-desktop-1.20.mjs` 仅将五个版本文件的六处值从 1.19.4 改为 1.20.0；脚本严格验证源码 SHA、干净工作区及所有变更行。发布附版本补丁、每个平台构建来源和 SHA256SUMS。release 分支自身也同步这些版本值，便于后续直接复现。
+
+`release.yml` 构建并验证桌面包，先留在 Actions artifacts；所有平台及 Rust 最低版本检查通过后，补入现有 Release，重新计算完整校验清单，再设置 latest。Release 标题只用 `v1.20.0`。本机磁盘不足以容纳 Rust 桌面构建，本次全部桌面目标使用对应原生 CI runner。
 
 # LightRead 轻阅
 
