@@ -76,14 +76,18 @@ export function compareVersions(a: string, b: string): number {
 }
 
 const CACHE_KEY = 'lightread-update-check'
+// Android 维护版不一定是仓库 latest；避免升级后继续采用旧策略缓存的桌面版本。
+const ANDROID_CACHE_KEY = 'lightread-update-check-android-v1'
+const usesAndroidReleases = () => isTauri() && isAndroid()
 const CACHE_TTL = 6 * 60 * 60 * 1000
 const INCOMPLETE_CACHE_TTL = 60_000
 const FOREGROUND_CHECK_INTERVAL = 60_000
 
 export async function checkUpdate(force = false): Promise<UpdateInfo> {
+  const cacheKey = usesAndroidReleases() ? ANDROID_CACHE_KEY : CACHE_KEY
   if (!force) {
     try {
-      const cached = JSON.parse(localStorage.getItem(CACHE_KEY) ?? '')
+      const cached = JSON.parse(localStorage.getItem(cacheKey) ?? '')
       const ttl = cached.info && pickRecommendedDownload(cached.info.assets)
         ? CACHE_TTL : INCOMPLETE_CACHE_TTL
       if (cached.at > Date.now() - ttl && cached.info) {
@@ -101,7 +105,7 @@ export async function checkUpdate(force = false): Promise<UpdateInfo> {
   ])
   rememberSource(info.source ?? 'github')
   try {
-    localStorage.setItem(CACHE_KEY, JSON.stringify({ at: Date.now(), info }))
+    localStorage.setItem(cacheKey, JSON.stringify({ at: Date.now(), info }))
   } catch { /* 缓存不可写不应隐藏已获取的新版本。 */ }
   return info
 }
@@ -148,13 +152,26 @@ async function fetchJson(url: string, accept: string, ms: number): Promise<any> 
 }
 
 async function fetchGithubRelease(ms: number): Promise<UpdateInfo> {
-  const data = await fetchJson(`https://api.github.com/repos/${REPO}/releases/latest`, 'application/vnd.github+json', ms)
+  const android = usesAndroidReleases()
+  let data = await fetchJson(`https://api.github.com/repos/${REPO}/releases${android ? '?per_page=100' : '/latest'}`, 'application/vnd.github+json', ms)
+  if (android) {
+    let best: any = null
+    for (const release of Array.isArray(data) ? data : []) {
+      const tag = String(release?.tag_name ?? '')
+      if (!RELEASE_TAG.test(tag) || release.draft === true || release.prerelease === true) continue
+      const names = (Array.isArray(release.assets) ? release.assets : [])
+        .map((a: any) => a?.name).filter((name: unknown): name is string => typeof name === 'string' && SAFE_NAME.test(name))
+      if (!hasCompleteAndroidAssets(names)) continue
+      if (!best || compareVersions(tag, best.tag_name) > 0) best = release
+    }
+    data = best
+  }
   const version = String(data?.tag_name ?? '').replace(/^v/, '')
   if (!version) throw new Error(t('update.fetchFailed'))
   return {
     version,
     hasUpdate: compareVersions(version, CURRENT_VERSION) > 0,
-    notes: (data.body ?? '').trim(),
+    notes: (android ? String(data.body ?? '').replace(ANDROID_MAINTENANCE_MARKER, '') : data.body ?? '').trim(),
     publishedAt: (data.published_at ?? '').slice(0, 10),
     pageUrl: data.html_url ?? RELEASES_URL,
     assets: (data.assets ?? []).map((a: any) => ({
@@ -175,6 +192,8 @@ async function fetchMirrorRelease(ms: number): Promise<UpdateInfo> {
 
 const RELEASE_TAG = /^v\d+\.\d+\.\d+$/
 const SAFE_NAME = /^[^/\\?#]+$/
+const ANDROID_MAINTENANCE_MARKER = '<!-- lightread-android-maintenance -->'
+const hasCompleteAndroidAssets = (names: string[]) => names.includes(CHECKSUM_FILE) && names.some(name => /\.apk$/.test(name))
 
 /** GitCode 下载地址: 与 GitHub 相同的 tag 与文件名 */
 export function mirrorDownloadUrl(tag: string, name: string): string {
@@ -248,19 +267,24 @@ export function parseSha256Sums(text: string): Map<string, string> {
 
 /**
  * GitCode「获取仓库的所有 Releases」的结果 → UpdateInfo。只认 vX.Y.Z 正式版本,
+ * Android 应用还接受带明确维护标记的预发布版，并要求 APK；桌面不采用这些预发布版。
  * 且必须已带 SHA256SUMS (镜像完成); 附件地址按固定模式自行拼接, 不信任返回的任意 URL。
  * GitCode 不返回附件大小, 镜像流程把大小写在说明末尾的 HTML 注释里。
  */
 export function parseMirrorReleases(list: unknown): UpdateInfo | null {
   if (!Array.isArray(list)) return null
+  const android = usesAndroidReleases()
   let best: any = null
   for (const release of list) {
     const tag = String(release?.tag_name ?? '')
-    if (!RELEASE_TAG.test(tag) || release.prerelease === true || release.release_status === 'pre') continue
+    if (!RELEASE_TAG.test(tag) || (android && release.draft === true)) continue
+    if ((release.prerelease === true || release.release_status === 'pre')
+      && !(android && String(release.body ?? '').includes(ANDROID_MAINTENANCE_MARKER))) continue
     const names = (Array.isArray(release.assets) ? release.assets : [])
       .filter((a: any) => a?.type !== 'source' && typeof a?.name === 'string' && SAFE_NAME.test(a.name))
       .map((a: any) => a.name as string)
     if (!names.includes(CHECKSUM_FILE)) continue
+    if (android && !hasCompleteAndroidAssets(names)) continue
     if (!best || compareVersions(tag, best.tag) > 0) best = { tag, names, release }
   }
   if (!best) return null
