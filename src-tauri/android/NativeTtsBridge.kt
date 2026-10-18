@@ -170,14 +170,28 @@ class NativeTtsBridge(context: Context, private val webView: WebView) {
 
   private fun chinese(voice: Voice): Boolean = voice.locale.language in setOf("zh", "cmn", "yue")
 
+  // 部分系统引擎会让不同语言变体共用 name，例如 zh-Hans / zh-Hant 都叫 zh。
+  private fun voiceId(voice: Voice): String = "${voice.name} [${voice.locale.toLanguageTag()}]"
+
   private fun voices(tts: TextToSpeech): List<Voice> {
-    val defaultName = tts.defaultVoice?.name
+    val defaultId = tts.defaultVoice?.let { voiceId(it) }
     return tts.voices.orEmpty().sortedWith(
       compareByDescending<Voice> { local(it) && chinese(it) }
         .thenByDescending { local(it) }
-        .thenByDescending { it.name == defaultName }
-        .thenBy { it.name }
+        .thenByDescending { voiceId(it) == defaultId }
+        .thenBy { voiceId(it) }
     )
+  }
+
+  private fun selectVoice(voices: List<Voice>, selected: String, text: String): Voice? {
+    val available = voices.filter { local(it) }
+    val needsChinese = text.any { it in '\u3400'..'\u9fff' || it in '\uf900'..'\ufaff' }
+    val automatic = available.firstOrNull { !needsChinese || chinese(it) }
+    if (selected.isEmpty()) return automatic
+    available.firstOrNull { voiceId(it) == selected }?.let { return it }
+    // 兼容旧版保存的纯 name：唯一时沿用；有歧义时按文本语言及系统默认顺序选择。
+    val legacy = available.filter { it.name == selected }
+    return if (legacy.size == 1) legacy.single() else if (legacy.isNotEmpty()) automatic else null
   }
 
   private fun pump() {
@@ -189,21 +203,19 @@ class NativeTtsBridge(context: Context, private val webView: WebView) {
         val voices = voices(tts)
         if (request.method == "voices") {
           val entries = JSONArray()
-          val defaultName = tts.defaultVoice?.name
+          val defaultId = tts.defaultVoice?.let { voiceId(it) }
           voices.forEach { voice ->
-            entries.put(JSONObject().put("id", voice.name).put("name", voice.name)
+            entries.put(JSONObject().put("id", voiceId(voice)).put("name", voice.name)
               .put("lang", voice.locale.toLanguageTag()).put("local", local(voice))
-              .put("isDefault", voice.name == defaultName))
+              .put("isDefault", voiceId(voice) == defaultId))
           }
           finish(request, JSONObject().put("voices", entries)
-            .put("defaultVoiceId", voices.firstOrNull { local(it) }?.name ?: JSONObject.NULL))
+            .put("defaultVoiceId", voices.firstOrNull { local(it) }?.let { voiceId(it) } ?: JSONObject.NULL))
           continue
         }
         val text = request.payload.optString("text")
         val selected = request.payload.optString("voiceId", "")
-        val needsChinese = text.any { it in '\u3400'..'\u9fff' || it in '\uf900'..'\ufaff' }
-        val voice = if (selected.isNotEmpty()) voices.firstOrNull { it.name == selected && local(it) }
-          else voices.firstOrNull { local(it) && (!needsChinese || chinese(it)) }
+        val voice = selectVoice(voices, selected, text)
         if (voice == null) {
           finishError(request, "NO_OFFLINE_VOICE", "No installed offline voice supports this text")
           continue
