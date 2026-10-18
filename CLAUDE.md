@@ -1,3 +1,7 @@
+# App 1.x 最终版补充（2026-10-17）
+
+v1.20.0 仅升级 App 版本；桌面基础版本和界面保持 1.19.4。移动版本写在 `tauri.android.conf.json` / `tauri.ios.conf.json`，检查须带 `--platform android`。App 发版走 `release-mobile.yml`，仅发布验证过的 APK 与校验文件，不使用下面旧的全平台流程，不改变桌面 latest。Release 标题只用版本号。
+
 # LightRead 轻阅
 
 开源、本地优先的电子书 / 论文阅读器。桌面 (Tauri 2) + 网页 PWA + Android 实验版。

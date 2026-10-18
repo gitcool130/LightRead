@@ -1,0 +1,82 @@
+name: Release App
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'App tag with locally built, signed APK assets uploaded to its draft Release'
+        type: string
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  verify-and-publish:
+    runs-on: ubuntu-22.04
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+      - run: cp scripts/check-release.mjs scripts/apk-layout.mjs "$RUNNER_TEMP/"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: build-tools;35.0.0
+      - name: Verify source, platform version, APK identity, fixed signature and ZIP layout
+        env:
+          AAPT: ${{ env.ANDROID_SDK_ROOT }}/build-tools/35.0.0/aapt
+          APKSIGNER: ${{ env.ANDROID_SDK_ROOT }}/build-tools/35.0.0/apksigner
+          CERT_SHA256: ${{ vars.ANDROID_CERT_SHA256 }}
+        run: |
+          test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
+          node "$RUNNER_TEMP/check-release.mjs" --self-test
+          node "$RUNNER_TEMP/check-release.mjs" --platform android --tag "$RELEASE_TAG"
+          mkdir release-assets
+          gh release download "$RELEASE_TAG" --dir release-assets
+          export APK_NAME="LightRead_${RELEASE_TAG}_android_arm64.apk"
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { readFileSync, readdirSync } from 'node:fs';
+          import { createHash } from 'node:crypto';
+          import { execFileSync } from 'node:child_process';
+          const name = process.env.APK_NAME;
+          assert.deepEqual(readdirSync('release-assets').sort(), [name, name+'.json', name+'.sha256', name+'.build.json', 'SHA256SUMS'].sort());
+          const build = JSON.parse(readFileSync(`release-assets/${name}.build.json`));
+          const report = JSON.parse(readFileSync(`release-assets/${name}.json`));
+          const hash = createHash('sha256').update(readFileSync(`release-assets/${name}`)).digest('hex');
+          assert.equal(build.tag, process.env.RELEASE_TAG);
+          assert.equal(build.commit, execFileSync('git', ['rev-parse', 'HEAD'], {encoding:'utf8'}).trim());
+          assert.equal(build.sha256, hash);
+          assert.equal(report.sha256, hash);
+          JS
+          (cd release-assets && sha256sum -c SHA256SUMS && sha256sum -c "$APK_NAME.sha256")
+          node "$RUNNER_TEMP/check-release.mjs" --platform android --tag "$RELEASE_TAG" --apk "release-assets/$APK_NAME" --cert "$CERT_SHA256"
+      - name: Publish App assets without changing desktop latest
+        run: gh release edit "$RELEASE_TAG" --draft=false --latest=false --title "$RELEASE_TAG"
+
+  mirror-gitcode:
+    needs: verify-and-publish
+    permissions:
+      contents: read
+    uses: ./.github/workflows/mirror-gitcode.yml
+    with:
+      tag: ${{ inputs.tag }}
+    secrets: inherit
