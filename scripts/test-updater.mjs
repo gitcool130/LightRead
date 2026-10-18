@@ -42,13 +42,14 @@ after(() => hook.deregister())
 
 const apk = { name: 'LightRead_v1.4.0_android_arm64.apk', url: 'https://github.com/yzfly/LightRead/releases/download/v1.4.0/app.apk', size: 4096 }
 const dmg = { name: 'LightRead_1.4.0_aarch64.dmg', url: 'https://github.com/yzfly/LightRead/releases/download/v1.4.0/app.dmg', size: 4096 }
-const release = (assets = [apk], version = '1.4.0') => ({
+const sums = { name: 'SHA256SUMS', url: 'https://github.com/yzfly/LightRead/releases/download/v1.4.0/SHA256SUMS', size: 128 }
+const release = (assets = [apk, sums], version = '1.4.0') => ({
   tag_name: `v${version}`, body: 'Release notes', published_at: '2026-10-03T12:00:00Z',
   html_url: `https://github.com/yzfly/LightRead/releases/tag/v${version}`,
   assets: assets.map(asset => ({ name: asset.name, browser_download_url: asset.url, size: asset.size })),
 })
 const cached = (assets, at, version = '1.4.0') => {
-  state.storage.set('lightread-update-check', JSON.stringify({ at, info: {
+  state.storage.set('lightread-update-check-android-v1', JSON.stringify({ at, info: {
     version, hasUpdate: true, notes: '', publishedAt: '', pageUrl: 'https://github.com/yzfly/LightRead/releases', assets,
   } }))
 }
@@ -65,7 +66,7 @@ beforeEach(() => {
   delete globalThis.LightReadUpdater
   state.storage.clear()
   state.native = true
-  state.fetcher = async () => ({ json: async () => release() })
+  state.fetcher = async url => githubJson(url)
   Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { userAgent: 'Mozilla/5.0 (Linux; Android 12)' } })
   globalThis.localStorage = {
     getItem: key => state.storage.get(key) ?? null,
@@ -154,7 +155,7 @@ test('stopped update observers ignore requests completing after unmount', async 
   const stop = watchUpdateAvailability(info => updates.push(info))
   assert.equal(state.calls.length, 1)
   stop()
-  resolve({ json: async () => release() })
+  resolve({ json: async () => [release()] })
   await settled()
   assert.deepEqual(updates, [])
 })
@@ -168,7 +169,7 @@ test('failed automatic checks retry on a later foreground event without erasing 
   t.after(stop)
   await settled()
   assert.deepEqual(updates, [])
-  state.fetcher = async () => ({ json: async () => release() })
+  state.fetcher = async url => githubJson(url)
   now += 60_001
   window.dispatchEvent(new Event('online'))
   await settled()
@@ -225,12 +226,128 @@ const mirrorRelease = (tag, names, extra = {}) => ({
   ...extra,
 })
 const json = data => ({ ok: true, json: async () => data })
+const githubJson = (url, data = release()) => json(url.includes('/releases?') ? [data] : data)
 const binary = (bytes, headers = {}) => new Response(bytes, { headers: { 'content-length': String(bytes.length), ...headers } })
 const text = body => new Response(body)
 const route = handlers => async (url, ...rest) => {
   for (const [pattern, handler] of handlers) if (pattern.test(url)) return handler(url, ...rest)
   throw new Error(`unexpected request ${url}`)
 }
+
+test('Android discovers non-latest maintenance releases by version and requires published stable APKs with checksums', async () => {
+  const latest = release(undefined, '1.20.0')
+  state.fetcher = route([
+    [/\/releases\/latest$/, async () => json(latest)],
+    [/\/releases\?per_page=100$/, async () => json([
+      release(undefined, '1.18.2'),
+      latest,
+      { ...release(undefined, '9.0.0'), draft: true },
+      { ...release(undefined, '8.0.0'), prerelease: true },
+      release([dmg, sums], '7.0.0'),
+      release([apk], '6.0.0'),
+      { ...release(), tag_name: 'tts-models' },
+      { ...release(), tag_name: 'v3.0.0-beta.1' },
+      { ...release(undefined, '1.20.1'), body: maintenanceNotes, published_at: '2026-10-15T00:00:00Z' },
+      { ...release(undefined, '1.19.5'), published_at: '2026-10-17T00:00:00Z' },
+    ])],
+  ])
+  const info = await checkUpdate(true)
+  assert.equal(info.version, '1.20.1')
+  assert.equal(info.notes, 'Android maintenance notes')
+  assert.equal(info.hasUpdate, true)
+  assert.equal(pickRecommendedDownload(info.assets).url, apk.url)
+  assert.equal(state.calls.length, 1)
+  assert.match(state.calls[0][0], /\/releases\?per_page=100$/)
+})
+
+test('Android does not accept an empty or incomplete release listing as a successful check', async () => {
+  for (const list of [[], [release([dmg, sums], '2.0.0'), release([apk], '1.20.1')]]) {
+    state.calls.length = 0
+    state.fetcher = async () => json(list)
+    await assert.rejects(checkUpdate(true), /update\.fetchFailed/)
+    assert.equal(state.calls.length, 3)
+  }
+})
+
+test('Android ignores the legacy six-hour cache and persists maintenance results separately', async () => {
+  const legacy = JSON.stringify({ at: Date.now(), info: {
+    version: '1.20.0', hasUpdate: true, notes: '', publishedAt: '', pageUrl: RELEASES_URL, assets: [apk],
+  } })
+  state.storage.set('lightread-update-check', legacy)
+  state.fetcher = async url => githubJson(url, release(undefined, '1.20.1'))
+  assert.equal((await checkUpdate()).version, '1.20.1')
+  assert.equal((await checkUpdate()).version, '1.20.1')
+  assert.equal(state.calls.length, 1)
+  assert.equal(state.storage.get('lightread-update-check'), legacy)
+  assert.equal(JSON.parse(state.storage.get('lightread-update-check-android-v1')).info.version, '1.20.1')
+})
+
+test('desktop keeps the latest endpoint and legacy cache without requiring Android assets', async () => {
+  navigator.userAgent = 'Mozilla/5.0 (Windows NT 10.0)'
+  const desktop = release([dmg], '1.20.0')
+  state.fetcher = route([[/\/releases\/latest$/, async () => json(desktop)]])
+  const info = await checkUpdate(true)
+  assert.equal(info.version, '1.20.0')
+  assert.deepEqual(info.assets, [dmg])
+  assert.equal(state.calls.length, 1)
+  assert.equal(JSON.parse(state.storage.get('lightread-update-check')).info.version, '1.20.0')
+  assert.equal(state.storage.has('lightread-update-check-android-v1'), false)
+  assert.equal((await checkUpdate()).version, '1.20.0')
+  assert.equal(state.calls.length, 1)
+})
+
+test('phone browsers retain the existing latest-release lookup', async () => {
+  state.native = false
+  state.fetcher = route([[/\/releases\/latest$/, async () => json(release())]])
+  assert.equal((await checkUpdate(true)).version, '1.4.0')
+  assert.equal(state.calls.length, 1)
+})
+
+const maintenanceNotes = 'Android maintenance notes\n\n<!-- lightread-android-maintenance -->'
+
+test('Android mirror accepts only explicitly marked complete maintenance prereleases', () => {
+  for (const flag of [{ prerelease: true }, { release_status: 'pre' }]) {
+    const list = [
+      mirrorRelease('v1.20.0', [apk.name, 'SHA256SUMS']),
+      mirrorRelease('v1.20.1', [apk.name, 'SHA256SUMS'], { ...flag, body: maintenanceNotes }),
+      mirrorRelease('v3.0.0', [apk.name, 'SHA256SUMS'], flag),
+      mirrorRelease('v4.0.0', [dmg.name, 'SHA256SUMS'], { ...flag, body: maintenanceNotes }),
+      mirrorRelease('v5.0.0', [apk.name], { ...flag, body: maintenanceNotes }),
+      mirrorRelease('v6.0.0', [apk.name, 'SHA256SUMS'], { ...flag, draft: true, body: maintenanceNotes }),
+      mirrorRelease('v7.0.0', [dmg.name, 'SHA256SUMS']),
+      mirrorRelease('v8.0.0-beta.1', [apk.name, 'SHA256SUMS'], { ...flag, body: maintenanceNotes }),
+    ]
+    const info = parseMirrorReleases(list)
+    assert.equal(info.version, '1.20.1')
+    assert.equal(info.notes, 'Android maintenance notes')
+    assert.equal(info.source, 'gitcode')
+  }
+})
+
+test('desktop mirror keeps rejecting marked maintenance prereleases and accepts desktop-only stable releases', () => {
+  navigator.userAgent = 'Mozilla/5.0 (Macintosh)'
+  const info = parseMirrorReleases([
+    mirrorRelease('v1.20.0', [dmg.name, 'SHA256SUMS']),
+    mirrorRelease('v1.20.1', [apk.name, 'SHA256SUMS'], { prerelease: true, body: maintenanceNotes }),
+    mirrorRelease('v1.21.0', [apk.name, 'SHA256SUMS'], { release_status: 'pre', body: maintenanceNotes }),
+  ])
+  assert.equal(info.version, '1.20.0')
+  assert.equal(pickRecommendedDownload(info.assets).url, `${GC_DL}/v1.20.0/${dmg.name}`)
+})
+
+test('Android GitHub failure falls back to a marked complete mirror maintenance release', async () => {
+  state.fetcher = route([
+    [/api\.github\.com/, async () => { throw new Error('offline') }],
+    [/api\.gitcode\.com/, async () => json([
+      mirrorRelease('v1.20.0', [apk.name, 'SHA256SUMS']),
+      mirrorRelease('v1.20.1', [apk.name, 'SHA256SUMS'], { release_status: 'pre', body: maintenanceNotes }),
+    ])],
+  ])
+  const info = await checkUpdate(true)
+  assert.equal(info.version, '1.20.1')
+  assert.equal(info.source, 'gitcode')
+  assert.equal(state.calls.length, 2)
+})
 
 test('mirror URLs are derived from the GitHub tag and file name', () => {
   assert.equal(mirrorDownloadUrl('v1.8.0', 'LightRead_1.8.0_x64-setup.exe'), `${GC_DL}/v1.8.0/LightRead_1.8.0_x64-setup.exe`)
@@ -313,7 +430,7 @@ test('GitHub failure falls back to GitCode metadata and release links follow the
   assert.deepEqual(state.opened, [MIRROR_RELEASES_URL, `${GC_DL}/v1.4.0/${apk.name}`, 'https://github.com/yzfly/LightRead/issues'])
 
   // GitHub 恢复后链接回到 GitHub
-  state.fetcher = async () => json(release())
+  state.fetcher = async url => githubJson(url)
   assert.equal((await checkUpdate(true)).source, 'github')
   assert.equal(githubUnreachable(), false)
   await openDownload(RELEASES_URL)
@@ -331,7 +448,7 @@ test('an older mirror never reports an update the installed version already has'
 test('missing mirror (not set up yet) keeps the old GitHub behaviour via the patient retry', async () => {
   let github = 0
   state.fetcher = route([
-    [/api\.github\.com/, async () => { if (++github === 1) throw new Error('slow'); return json(release()) }],
+    [/api\.github\.com/, async url => { if (++github === 1) throw new Error('slow'); return githubJson(url) }],
     [/api\.gitcode\.com/, async () => { throw new Error('地址不存在 (404)') }],
   ])
   const info = await checkUpdate(true)
