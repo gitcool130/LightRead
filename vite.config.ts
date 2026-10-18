@@ -7,6 +7,10 @@ import { fileURLToPath } from 'node:url'
 import { cloudflare } from '@cloudflare/vite-plugin'
 import { BROWSER_TARGET, legacyCssFallbacks, legacyRegexRewrite } from './vite.legacy.ts'
 
+const androidVersion = process.env.TAURI_ENV_PLATFORM === 'android'
+  ? JSON.parse(readFileSync(new URL('./src-tauri/tauri.android.conf.json', import.meta.url), 'utf-8')).version
+  : null
+
 const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf-8'))
 
 /**
@@ -30,7 +34,7 @@ function foliatePaginatorFork(): Plugin {
 
 export default defineConfig({
   define: {
-    __APP_VERSION__: JSON.stringify(pkg.version),
+    __APP_VERSION__: JSON.stringify(androidVersion ?? pkg.version),
   },
   plugins: [foliatePaginatorFork(), legacyRegexRewrite(), vue(), VitePWA({
     // 桌面/移动端 (Tauri) 资源都在本地, 不需要 PWA 离线缓存; Windows WebView2

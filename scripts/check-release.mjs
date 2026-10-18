@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
+import { verifyApkLayout } from './apk-layout.mjs'
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename } from 'node:path'
 import { parseArgs } from 'node:util'
 
@@ -20,7 +21,7 @@ function validateVersions(versions, tag) {
   return version
 }
 
-function repositoryVersion(tag) {
+function repositoryVersion(tag, platform = 'desktop') {
   const json = file => JSON.parse(readFileSync(file, 'utf8'))
   const pkg = json('package.json')
   const lock = json('package-lock.json')
@@ -32,14 +33,22 @@ function repositoryVersion(tag) {
   assert.equal(config.identifier, 'com.yzfly.lightread', 'application identifier must remain stable')
   assert.equal(config.bundle?.android?.debugApplicationIdSuffix, '.debug', 'Android package suffix must remain stable')
   assert.ok(!config.bundle?.android?.autoIncrementVersionCode, 'release versionCode must be reproducible')
-  const version = validateVersions({
+  const desktopVersion = validateVersions({
     'package.json': pkg.version,
     'package-lock.json': lock.version,
     'package-lock.json packages root': lock.packages?.['']?.version,
     'src-tauri/Cargo.toml': tomlVersion(cargo),
     'src-tauri/Cargo.lock lightread': tomlVersion(cargoLock),
     'src-tauri/tauri.conf.json': config.version,
-  }, tag)
+  }, platform === 'desktop' ? tag : undefined)
+  assert.ok(['desktop', 'android', 'ios'].includes(platform), 'unknown release platform')
+  let version = desktopVersion
+  if (platform !== 'desktop' && existsSync(`src-tauri/tauri.${platform}.conf.json`)) {
+    const mobile = json(`src-tauri/tauri.${platform}.conf.json`)
+    assert.ok(!mobile.identifier && !mobile.bundle, 'mobile version config must not override application identity')
+    version = validateVersions({ 'package.json': mobile.version }, tag)
+  }
+  if (tag) assert.equal(tag, `v${version}`, 'release tag does not match platform version')
   const [major, minor, patch] = version.split('.').map(Number)
   const versionCode = config.bundle?.android?.versionCode ?? major * 1_000_000 + minor * 1_000 + patch
   assert.ok(Number.isSafeInteger(versionCode) && versionCode > 0 && versionCode <= 2_100_000_000, 'invalid Android versionCode')
@@ -86,19 +95,21 @@ function selfTest() {
 
 try {
   const { values } = parseArgs({ options: {
-    tag: { type: 'string' }, apk: { type: 'string' }, cert: { type: 'string' }, 'self-test': { type: 'boolean' },
+    platform: { type: 'string' }, tag: { type: 'string' }, apk: { type: 'string' }, cert: { type: 'string' }, 'self-test': { type: 'boolean' },
   } })
   if (values['self-test']) {
     selfTest()
   } else {
-    const expected = repositoryVersion(values.tag)
+    const expected = repositoryVersion(values.tag, values.platform ?? (values.apk ? 'android' : 'desktop'))
     console.log(`Version checks passed: ${expected.version}`)
     if (values.apk) {
       const tool = (name, args) => execFileSync(process.env[name.toUpperCase()] || name, args, { encoding: 'utf8' })
       const metadata = verifyApkMetadata(tool('aapt', ['dump', 'badging', values.apk]), tool('apksigner', ['verify', '--verbose', '--print-certs', values.apk]), { ...expected, cert: values.cert })
-      const sha256 = createHash('sha256').update(readFileSync(values.apk)).digest('hex')
+      const bytes = readFileSync(values.apk)
+      const layout = verifyApkLayout(bytes)
+      const sha256 = createHash('sha256').update(bytes).digest('hex')
       writeFileSync(`${values.apk}.sha256`, `${sha256}  ${basename(values.apk)}\n`)
-      writeFileSync(`${values.apk}.json`, `${JSON.stringify({ file: basename(values.apk), ...metadata, sha256 }, null, 2)}\n`)
+      writeFileSync(`${values.apk}.json`, `${JSON.stringify({ file: basename(values.apk), ...metadata, layout, sha256 }, null, 2)}\n`)
       console.log(JSON.stringify({ ...metadata, sha256 }, null, 2))
     }
   }
