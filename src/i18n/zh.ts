@@ -1095,6 +1095,8 @@ export default {
   'tts.error': '听书暂时中断，请重试或换一种语音',
   'tts.pdfNoText': '这份 PDF 没有可听的文字，打开原书继续读',
   'tts.neuralUnavailable': '这个音色暂时用不了，已换成系统语音',
+  'tts.neuralUnavailableNoFallback': '语音暂时不可用，此设备没有备用系统语音，请检查网络后重试',
+  'tts.systemUnavailable': '此设备不支持系统语音，请选择在线语音',
   'tts.localLoading': '正在准备离线语音，第一次大约需要 10–20 秒…',
 
   // ---- 阅读模式 ----

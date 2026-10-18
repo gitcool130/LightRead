@@ -386,8 +386,8 @@ export class ListenPlayer {
         } catch (e) {
           if (e instanceof FeedError) throw e
           if (!alive()) continue
-          // 合成 / 播放失败: 已排上的照常播完, 余下 (含失败块) 改用系统语音
-          reportNeuralFailure(e)
+          // 合成 / 播放失败: 系统语音可用时补读余下内容, 否则保留原错误并结束。
+          if (!reportNeuralFailure(e)) throw e
           switching = true
           const back = e instanceof PlaybackError ? [...e.chunk.sentences] : []
           this.heldChunk = null

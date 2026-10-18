@@ -1095,6 +1095,8 @@ export default {
   'tts.error': "Listening stopped. Try again or choose another voice source",
   'tts.pdfNoText': "This PDF has no text to listen to. Open the original to read",
   'tts.neuralUnavailable': "This voice is unavailable. System voice is now on",
+  'tts.neuralUnavailableNoFallback': 'Speech is unavailable and this device has no system voice fallback. Check your connection and retry',
+  'tts.systemUnavailable': 'System speech is unavailable on this device. Choose an online voice',
   'tts.localLoading': "Getting offline voice ready, about 10–20 seconds the first time…",
 
   // ---- 阅读模式 ----

@@ -751,3 +751,56 @@ test('播放器: 系统语音没法调音量 → fadeOut 返回 unsupported, 继
   await log.done
   assert.deepEqual(log.keys, sentences.map(s => s.key))
 })
+
+test('播放器: 无系统语音时保留在线失败, 网络恢复后可再次播放', async () => {
+  resetEnv('edge')
+  const synthesis = globalThis.speechSynthesis
+  const utterance = globalThis.SpeechSynthesisUtterance
+  const failure = new Error('HTTP 403')
+  env.synth = async () => { throw failure }
+  const sentences = [S('a', '恢复后继续朗读。', { sectionEnd: true })]
+  const { player, log } = makePlayer()
+  delete globalThis.speechSynthesis
+  delete globalThis.SpeechSynthesisUtterance
+  try {
+    player.play(makeFeed(sentences))
+    const end = await log.done
+    assert.equal(end.reason, 'error')
+    assert.equal(end.error, failure, '保留合成错误, 不产生缺少 API 的 ReferenceError')
+    assert.equal(env.synthCalls.length, 2, '在线重试一次后结束')
+    assert.deepEqual(env.notices.map(n => n[0]), ['tts.neuralUnavailableNoFallback'])
+    assert.deepEqual(log.keys, [])
+    assert.equal(player.state, 'idle')
+    env.synth = async text => new Blob([text])
+    player.play(makeFeed(sentences))
+    await until(() => log.ends.length === 2)
+    assert.deepEqual(log.ends, ['error', 'finished'])
+    assert.deepEqual(log.keys, ['a'])
+    assert.equal(env.synthCalls.length, 3, '无需 resetEdgeFailure 也能重新请求在线语音')
+  } finally {
+    player.stop()
+    globalThis.speechSynthesis = synthesis
+    globalThis.SpeechSynthesisUtterance = utterance
+  }
+})
+
+test('播放器: 选择不可用的系统语音时报告明确错误', async () => {
+  resetEnv('system')
+  const synthesis = globalThis.speechSynthesis
+  const utterance = globalThis.SpeechSynthesisUtterance
+  const { player, log } = makePlayer()
+  delete globalThis.speechSynthesis
+  delete globalThis.SpeechSynthesisUtterance
+  try {
+    player.play(makeFeed([S('a', '你好。')]))
+    const end = await log.done
+    assert.equal(end.reason, 'error')
+    assert.equal(end.error.message, 'tts.systemUnavailable')
+    assert.equal(player.state, 'idle')
+    assert.deepEqual(log.keys, [])
+  } finally {
+    player.stop()
+    globalThis.speechSynthesis = synthesis
+    globalThis.SpeechSynthesisUtterance = utterance
+  }
+})

@@ -36,11 +36,11 @@ const modules = {
     export const localTtsSynthesize = (...args) => globalThis.__ttsTest.synthesize(...args);
     export const localPack = { crashed: false };
     export const isLocalCrashError = e => String(e?.message ?? e).includes('LOCAL_TTS_CRASHED')`,
-  './edgeTts': `export const edgeAvailable = () => false;
+  './edgeTts': `export const edgeAvailable = () => true;
     export const edgePause = () => {};
     export const edgeResume = () => {};
     export const edgeStop = () => {};
-    export const edgeSynthesize = () => { throw new Error('unexpected Edge call') };
+    export const edgeSynthesize = (...args) => globalThis.__ttsTest.synthesize(...args);
     export const playAudio = async blob => { globalThis.__ttsTest.played.push(blob); return globalThis.__ttsTest.play(blob) }`,
 }
 const hook = registerHooks({
@@ -54,12 +54,14 @@ const hook = registerHooks({
 const {
   speakText, stopSpeech, resetEdgeFailure, prefetchSpeech, pauseSpeech, resumeSpeech,
   splitSpeechText, forgetLocalModel, LOCAL_LOADING_HINT_MS,
+  getVoices, listVoicesSorted, speak, systemSpeechAvailable,
 } = await import(ttsUrl)
 hook.deregister()
 
 function reset() {
   stopSpeech()
   resetEdgeFailure()
+  state.settings.ttsEngine = 'local'
   state.played.length = 0
   state.spoken.length = 0
   state.notices.length = 0
@@ -270,4 +272,70 @@ test('slow first model load shows a loading hint and dismisses it when ready', a
   state.notices.length = 0
   assert.equal(await speakText('第二次。'), 'end')
   assert.equal(state.notices.length, 0)
+})
+
+test('missing Web Speech API keeps voice lists and playback controls safe', async () => {
+  reset()
+  const synthesis = globalThis.speechSynthesis
+  const utterance = globalThis.SpeechSynthesisUtterance
+  try {
+    // 有些 WebView 两者都缺失, 也不能把只有 speechSynthesis 的环境视为可朗读。
+    delete globalThis.SpeechSynthesisUtterance
+    assert.equal(systemSpeechAvailable(), false)
+    assert.deepEqual(await getVoices(), [])
+    delete globalThis.speechSynthesis
+    assert.deepEqual(await listVoicesSorted(), [])
+    assert.doesNotThrow(() => { pauseSpeech(); resumeSpeech(); stopSpeech() })
+    await assert.rejects(speak('你好。', { rate: 1 }), { message: 'tts.systemUnavailable' })
+    state.settings.ttsEngine = 'system'
+    await assert.rejects(speakText('你好。'), { message: 'tts.systemUnavailable' })
+  } finally {
+    globalThis.speechSynthesis = synthesis
+    globalThis.SpeechSynthesisUtterance = utterance
+  }
+  assert.equal(systemSpeechAvailable(), true)
+  assert.ok((await listVoicesSorted()).length, 'missing API does not poison the voice cache')
+})
+
+test('PDF speech reports unavailable fallback and retries the same text after recovery', async () => {
+  reset()
+  state.settings.ttsEngine = 'edge'
+  const synthesis = globalThis.speechSynthesis
+  const utterance = globalThis.SpeechSynthesisUtterance
+  const failure = new Error('HTTP 403')
+  let calls = 0
+  state.synthesize = async text => {
+    if (++calls === 1) throw failure
+    return new Blob([text])
+  }
+  delete globalThis.speechSynthesis
+  delete globalThis.SpeechSynthesisUtterance
+  try {
+    // PDF 开始播放会先 stopSpeech, 原来这里就因缺少 Speech API 抛错。
+    stopSpeech()
+    await assert.rejects(speakText('同一段 PDF 文本。'), e => e === failure)
+    assert.deepEqual(state.notices.map(n => n[0]), ['tts.neuralUnavailableNoFallback'])
+    assert.equal(state.played.length, 0)
+    assert.equal(state.spoken.length, 0)
+    // 不重置全局失败标记、不清空缓存, 同一段仍能重新请求在线合成。
+    assert.equal(await speakText('同一段 PDF 文本。'), 'end')
+    assert.equal(calls, 2)
+    assert.equal(await state.played[0].text(), '同一段 PDF 文本。')
+  } finally {
+    globalThis.speechSynthesis = synthesis
+    globalThis.SpeechSynthesisUtterance = utterance
+    stopSpeech()
+  }
+})
+
+test('available system speech still handles online failure for the rest of the session', async () => {
+  reset()
+  state.settings.ttsEngine = 'edge'
+  let calls = 0
+  state.synthesize = async () => { calls++; throw new Error('network down') }
+  assert.equal(await speakText('第一段。'), 'end')
+  assert.equal(await speakText('第二段。'), 'end')
+  assert.deepEqual(state.spoken, ['第一段。', '第二段。'])
+  assert.deepEqual(state.notices.map(n => n[0]), ['tts.neuralUnavailable'])
+  assert.equal(calls, 1, 'working system fallback avoids repeated network failures')
 })

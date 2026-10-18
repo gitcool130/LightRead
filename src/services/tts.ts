@@ -4,10 +4,15 @@
  * macOS 可在 系统设置 > 辅助功能 > 朗读内容 中下载更高质量音色.
  */
 
+/** Android WebView 可能没有 Web Speech API, 在线播放不应依赖它。 */
+export const systemSpeechAvailable = () =>
+  typeof speechSynthesis !== 'undefined' && typeof SpeechSynthesisUtterance !== 'undefined'
+
 let voicesReady: Promise<SpeechSynthesisVoice[]> | null = null
 
 /** 部分平台 getVoices 首次调用为空, 需等 voiceschanged */
 export function getVoices(): Promise<SpeechSynthesisVoice[]> {
+  if (!systemSpeechAvailable()) return Promise.resolve([])
   if (!voicesReady) {
     voicesReady = new Promise(resolve => {
       const load = () => speechSynthesis.getVoices()
@@ -38,6 +43,7 @@ export async function pickVoice(
   preferredName: string,
   sampleText: string,
 ): Promise<SpeechSynthesisVoice | undefined> {
+  if (!systemSpeechAvailable()) throw new Error(t('tts.systemUnavailable'))
   const voices = await getVoices()
   if (preferredName) {
     const chosen = voices.find(v => v.name === preferredName)
@@ -55,8 +61,9 @@ export interface SpeakOptions {
   rate: number
 }
 
-/** 朗读一段文本, 结束 / 出错 / 被取消时 resolve */
+/** 朗读一段文本; 缺少系统语音时 reject, 播放结束 / 出错 / 被取消时 resolve */
 export function speak(text: string, opts: SpeakOptions): Promise<'end' | 'cancelled'> {
+  if (!systemSpeechAvailable()) return Promise.reject(new Error(t('tts.systemUnavailable')))
   return new Promise(resolve => {
     const utterance = new SpeechSynthesisUtterance(text)
     if (opts.voice) {
@@ -72,15 +79,15 @@ export function speak(text: string, opts: SpeakOptions): Promise<'end' | 'cancel
 }
 
 export function stopSpeaking() {
-  speechSynthesis.cancel()
+  if (typeof speechSynthesis !== 'undefined') speechSynthesis.cancel()
 }
 
 export function pauseSpeaking() {
-  speechSynthesis.pause()
+  if (typeof speechSynthesis !== 'undefined') speechSynthesis.pause()
 }
 
 export function resumeSpeaking() {
-  speechSynthesis.resume()
+  if (typeof speechSynthesis !== 'undefined') speechSynthesis.resume()
 }
 
 /** foliate TTS 产出的 SSML → 纯文本 */
@@ -208,17 +215,19 @@ function warmLocal(): Promise<void> {
   return localWarm
 }
 
-/** 神经引擎出错: 本次会话改用系统语音 (resetEdgeFailure 后恢复), 提示一次 */
-export function reportNeuralFailure(error: unknown) {
+/** 提示合成失败, 返回能否回退系统语音; 没有备用引擎时保留下一次重试的机会。 */
+export function reportNeuralFailure(error: unknown): boolean {
   console.error(error)
-  if (neuralFailed) return
-  neuralFailed = true
+  const canFallback = systemSpeechAvailable()
+  if (neuralFailed) return canFallback
+  neuralFailed = canFallback
   if (isLocalCrashError(error)) {
     localPack.crashed = true
     toast(t('tts.localCrashedPaused'), 'error', 8000)
-    return
+    return canFallback
   }
-  toast(t('tts.neuralUnavailable'), 'error', 4000)
+  toast(t(canFallback ? 'tts.neuralUnavailable' : 'tts.neuralUnavailableNoFallback'), 'error', 4000)
+  return canFallback
 }
 
 /** 语音包被删除/重装后调用, 下次合成重新提示加载 */
@@ -326,8 +335,10 @@ function requestSynth(engine: NeuralEngine, text: string, priority: number): Cac
     // 在线引擎走网络, 可并发, 不排队
     entry = { promise: engine.synth(text) }
   }
-  // 预取的结果可能没人 await (停止/跳转), 避免未处理的 rejection
-  entry.promise.catch(() => {})
+  // 预取的结果可能没人 await; 失败结果不能留在缓存里阻止相同文本重试。
+  entry.promise.catch(() => {
+    if (synthCache.get(key) === entry) synthCache.delete(key)
+  })
   synthCache.set(key, entry)
   if (synthCache.size > MAX_CACHE) {
     const first = synthCache.keys().next().value
@@ -393,7 +404,7 @@ export async function speakText(text: string): Promise<'end' | 'cancelled'> {
       return 'end'
     } catch (e) {
       if (generation !== speechGeneration || e instanceof SpeechCancelled) return 'cancelled'
-      reportNeuralFailure(e)
+      if (!reportNeuralFailure(e)) throw e
       // 只用系统语音补读尚未播放的部分
       remaining = parts.slice(index).join(' ') || text
     }
