@@ -166,6 +166,7 @@ pub fn run() {
       library_files::library_file_download,
       library_files::library_file_rename,
       library_files::library_file_remove,
+      library_files::library_file_write_chunk,
       app_update::update_download,
       app_update::update_finish,
       calibre::calibre_list_books,

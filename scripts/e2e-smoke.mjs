@@ -698,13 +698,16 @@ await step('PDF 快捷键面板展示完整操作并适配短视口', async () =
   if (!(firstRowLayout.labelTop > firstRowLayout.keysTop)) {
     throw new Error(`移动窄屏快捷键行未切换为单列: ${JSON.stringify(firstRowLayout)}`)
   }
-  const pageBefore = await page.locator('.page-input').inputValue()
+  // ≤720px 是手机阅读布局: 页码在底栏的 .phone-page-label, 没有桌面工具栏的页码框
+  const readPage = () => page.evaluate(() => document.querySelector('.page-input')?.value
+    ?? document.querySelector('.phone-page-label b')?.textContent)
+  const pageBefore = await readPage()
   const readerScrollBefore = await page.locator('.pane-left, .paged-box, .reflow-scroll').first().evaluate(element => element.scrollTop)
   await page.keyboard.press('PageDown')
   await page.waitForFunction(() => (document.querySelector('.shortcut-menu')?.scrollTop ?? 0) > 0)
   const panelScrollAfter = await page.locator('.shortcut-menu').evaluate(element => element.scrollTop)
   const readerScrollAfter = await page.locator('.pane-left, .paged-box, .reflow-scroll').first().evaluate(element => element.scrollTop)
-  const pageAfter = await page.locator('.page-input').inputValue()
+  const pageAfter = await readPage()
   if (panelScrollAfter <= 0 || readerScrollAfter !== readerScrollBefore || pageAfter !== pageBefore) {
     throw new Error(`键盘滚动未由快捷键面板接管: ${JSON.stringify({ panelScrollAfter, readerScrollBefore, readerScrollAfter, pageBefore, pageAfter })}`)
   }

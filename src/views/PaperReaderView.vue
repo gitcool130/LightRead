@@ -3,6 +3,8 @@ import AppSelect from '../components/AppSelect.vue'
 import { AutoScrollClock, ScrollAccumulator } from '../services/autoScroll'
 import { AUTO_SPEED_LEVELS, AUTO_SPEED_STEPS, speedPosition, secondsAtPosition } from '../services/autoReadSpeed'
 import LevelSlider from '../components/LevelSlider.vue'
+import { MQ, useMediaQuery } from '../composables/useMediaQuery'
+import { tapZone } from '../services/readerTapZone'
 import { TTS_RATE_MAX, TTS_RATE_MIN, TTS_RATE_STOPS, rateText } from '../services/ttsRate'
 import { pingUsage } from '../services/usageStats'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -1972,6 +1974,8 @@ function onPdfTouchEnd(e: TouchEvent) {
   selection.value = null
   dragSel = null
   suppressClick = true
+  // 手指滑过时浏览器多半不发 click; 不及时复位会吞掉下一次轻点
+  setTimeout(() => { suppressClick = false }, 400)
   if (verticalDir) void pagedTurnFromEdge(verticalDir)
   else if (dx < 0) nextPage()
   else prevPage()
@@ -2148,6 +2152,10 @@ function onHolderClick(e: MouseEvent, page: number) {
     noteDraft.value = hit.a.note ?? ''
     popPos.value = clampPop(e.clientX - 160, e.clientY + 12)
     activeAnnotation.value = hit.a
+    return
+  }
+  if (isPhone.value) {
+    phoneTap(e)
     return
   }
   if (bookPaged.value) {
@@ -3647,13 +3655,197 @@ onBeforeUnmount(() => {
   renderBytes = null
   sourcePdfBlob = null
 })
+/* ================= 手机阅读界面 (≤720px) =================
+ * 与重排书阅读器 (ReaderView) 同一套手机交互: 正文占满全屏, 轻点中间呼出 / 收起顶栏与底栏;
+ * 翻页模式下竖屏轻点上 / 下三分之一翻页 (横屏左 / 右). 底栏是页码进度条 + 目录 / 缩略图 / 笔记 /
+ * 听书 / 显示五个入口, 面板都是底部抽屉. 桌面工具栏不变. */
+const isPhone = useMediaQuery(MQ.phone)
+const phoneBars = ref(true)
+const displaySheet = ref(false)
+const phoneMore = ref(false)
+const phoneJump = ref(false)
+const phoneJumpInput = ref<HTMLInputElement>()
+/** 拖动进度条时的预览页 (松手才跳) */
+const slidePage = ref<number | null>(null)
+let phoneBarsTimer: ReturnType<typeof setTimeout> | undefined
+
+/** 底部抽屉 (遮罩可点收起) */
+const phoneSheetOpen = computed(() => isPhone.value && (drawerOpen.value || displaySheet.value || ttsPanel.value))
+/** 打开着任何浮层时工具栏不自动隐去 */
+const phoneOverlayOpen = () =>
+  phoneSheetOpen.value || phoneMore.value || phoneJump.value || pdfSearchOpen.value || autoPanel.value
+  || !!rightTab.value || !!activeAnnotation.value || propertiesOpen.value
+
+function showPhoneBars(autoHide = false) {
+  phoneBars.value = true
+  clearTimeout(phoneBarsTimer)
+  if (autoHide) {
+    phoneBarsTimer = setTimeout(() => {
+      if (!phoneOverlayOpen()) phoneBars.value = false
+    }, 3000)
+  }
+}
+
+function hidePhoneBars() {
+  clearTimeout(phoneBarsTimer)
+  if (!phoneOverlayOpen()) phoneBars.value = false
+}
+
+function closePhoneSheets() {
+  closeDrawer()
+  displaySheet.value = false
+  ttsPanel.value = false
+}
+
+/** 底栏入口: 同一时间只开一个抽屉, 再点一次收起 */
+function phoneDock(tab: DrawerTab | 'tts' | 'display') {
+  const wasOpen = tab === 'tts' ? ttsPanel.value
+    : tab === 'display' ? displaySheet.value
+    : tab === 'toc' ? tocOpen.value : tab === 'thumbnails' ? thumbnailOpen.value : annoOpen.value
+  phoneMore.value = false
+  phoneJump.value = false
+  if (tab !== 'tts') ttsPanel.value = false
+  if (tab !== 'display') displaySheet.value = false
+  if (tab === 'tts' || tab === 'display') closeDrawer()
+  if (wasOpen) {
+    closePhoneSheets()
+    return
+  }
+  if (tab === 'tts') void openTTSPanel()
+  else if (tab === 'display') {
+    autoPanel.value = false
+    displaySheet.value = true
+  } else setDrawerTab(tab)
+}
+
+/** 轻点正文: 选字 / 划线由各自逻辑处理, 这里只管翻页区与呼出工具栏 */
+function phoneTap(e: MouseEvent) {
+  if (selection.value || liveSel.value || window.getSelection()?.toString()) return
+  const box = (pdfLayout.value === 'reflow' ? reflowScroller.value : bookPaged.value ? pagedBox.value : scroller.value)
+    ?.getBoundingClientRect()
+  // 滚动模式整屏都用来滑动阅读, 轻点只呼出 / 收起工具栏
+  const zone = box && bookPaged.value
+    ? tapZone({
+        x: e.clientX - box.left,
+        y: e.clientY - box.top,
+        width: box.width,
+        height: box.height,
+        portrait: box.height > box.width,
+        autoReading: autoReading.value,
+      })
+    : 'menu'
+  if (zone === 'prev') {
+    prevPage()
+    hidePhoneBars()
+  } else if (zone === 'next') {
+    nextPage()
+    hidePhoneBars()
+  } else if (phoneBars.value) hidePhoneBars()
+  else showPhoneBars()
+}
+
+/** 页面以外的留白 (页间灰底 / 流式正文): 页内的轻点由 onHolderClick 处理后转过来 */
+function onViewportClick(e: MouseEvent) {
+  if (!isPhone.value) return
+  const target = e.target as HTMLElement
+  if (target.closest('.p-holder, button, a, input')) return
+  if (suppressClick) {
+    suppressClick = false
+    return
+  }
+  phoneTap(e)
+}
+
+/** 目录条目 (含子级) 按页码排好, 进度条拖动时显示落点所在章节 */
+const tocMarks = computed(() => {
+  const marks: { page: number; label: string }[] = []
+  const walk = (items: TocItem[]) => {
+    for (const item of items) {
+      const page = item.href ? tocDestinationOf(item.href)?.page : undefined
+      if (page) marks.push({ page, label: item.label })
+      if (item.subitems?.length) walk(item.subitems)
+    }
+  }
+  walk(tocItems.value)
+  return marks.sort((a, b) => a.page - b.page)
+})
+
+function tocLabelAt(page: number) {
+  let label = ''
+  for (const mark of tocMarks.value) {
+    if (mark.page > page) break
+    label = mark.label
+  }
+  return label
+}
+
+const phonePage = computed(() => slidePage.value ?? currentPage.value)
+
+function onPhoneSlideInput(e: Event) {
+  slidePage.value = Number((e.target as HTMLInputElement).value)
+  showPhoneBars()
+}
+
+function onPhoneSlideChange(e: Event) {
+  const page = Number((e.target as HTMLInputElement).value)
+  slidePage.value = null
+  if (Number.isFinite(page) && page !== currentPage.value) gotoPage(page)
+  showPhoneBars(true)
+}
+
+async function togglePhoneJump() {
+  phoneJump.value = !phoneJump.value
+  phoneMore.value = false
+  if (!phoneJump.value) return
+  pageInput.value = String(currentPage.value)
+  await nextTick()
+  phoneJumpInput.value?.select()
+}
+
+function confirmPhoneJump() {
+  jumpTo()
+  phoneJump.value = false
+  showPhoneBars(true)
+}
+
+function phoneSearch() {
+  phoneMore.value = false
+  closePhoneSheets()
+  if (pdfSearchOpen.value) closePdfSearch()
+  else openPdfSearch()
+}
+
+function phoneMoreAction(action: () => unknown) {
+  phoneMore.value = false
+  void action()
+}
+
+function phoneAutoRead() {
+  displaySheet.value = false
+  toggleAutoPanel()
+}
+
+/** 当前缩放的人话: 适高 / 适宽 / 百分比 */
+const zoomLabel = computed(() => zoom.value === 'fit-page' ? t('reader.fitHeight')
+  : zoom.value === 'fit-width' ? t('reader.fitWidth')
+  : zoomPercentLabel(zoom.value as number))
+
+// 开书后先显示工具栏, 几秒无操作收起; 进入手机布局 (旋转 / 分屏) 同样处理
+watch([loading, isPhone], ([isLoading, phone]) => {
+  if (!isLoading && phone) showPhoneBars(true)
+})
+// 浮层全部关闭后恢复自动收起
+watch(phoneOverlayOpen, open => {
+  if (!open && isPhone.value && phoneBars.value) showPhoneBars(true)
+})
+onBeforeUnmount(() => clearTimeout(phoneBarsTimer))
 </script>
 
 <template>
   <div
     ref="paperRoot"
     class="paper"
-    :class="{ 'is-fullscreen': isFullscreen, 'is-presentation': presentationMode }"
+    :class="{ 'is-fullscreen': isFullscreen, 'is-presentation': presentationMode, 'is-phone': isPhone, 'phone-bars': isPhone && phoneBars }"
   >
     <input
       ref="pdfOpenInput"
@@ -3663,7 +3855,7 @@ onBeforeUnmount(() => {
       hidden
       @change="onPdfOpenPicked"
     />
-    <header class="paper-header">
+    <header class="paper-header" :class="{ 'phone-hidden': isPhone && !phoneBars }">
       <div class="paper-bar">
         <div class="paper-document">
           <button class="icon-btn document-back" :title="backLabel" @click="router.push(backTarget)">
@@ -3675,7 +3867,61 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <div class="paper-context-actions">
+        <!-- 手机顶栏: 搜索 / AI / 更多; 翻译、另存为等收进「更多」 -->
+        <div v-if="isPhone" class="phone-top-actions">
+          <button
+            class="icon-btn"
+            :class="{ 'icon-active': pdfSearchOpen }"
+            :title="t('reader.searchInBook')"
+            :aria-label="t('reader.searchInBook')"
+            :aria-pressed="pdfSearchOpen"
+            @click="phoneSearch"
+          >
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M10.5 3a7.5 7.5 0 1 0 4.55 13.46l3.75 3.75a1 1 0 0 0 1.4-1.42l-3.74-3.74A7.5 7.5 0 0 0 10.5 3zM5 10.5a5.5 5.5 0 1 1 11 0 5.5 5.5 0 0 1-11 0z"/></svg>
+          </button>
+          <button
+            v-if="paperAgentRuntimeAvailable()"
+            class="icon-btn"
+            :class="{ 'icon-active': rightTab === 'agent' }"
+            :title="t('paper.agentTitle')"
+            :aria-label="t('paper.agentTitle')"
+            :disabled="!pageCount"
+            @click="closePhoneSheets(); openRight('agent')"
+          >
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M12 2.5a1 1 0 0 1 .95.69l1.4 4.3a3 3 0 0 0 1.92 1.92l4.3 1.4a1 1 0 0 1 0 1.9l-4.3 1.4a3 3 0 0 0-1.92 1.92l-1.4 4.3a1 1 0 0 1-1.9 0l-1.4-4.3a3 3 0 0 0-1.92-1.92l-4.3-1.4a1 1 0 0 1 0-1.9l4.3-1.4a3 3 0 0 0 1.92-1.92l1.4-4.3A1 1 0 0 1 12 2.5z"/></svg>
+          </button>
+          <div class="reader-more-wrap">
+            <button
+              class="icon-btn"
+              :class="{ 'icon-active': phoneMore }"
+              :title="t('reader.moreActions')"
+              :aria-label="t('reader.moreActions')"
+              :aria-expanded="phoneMore"
+              @click="phoneMore = !phoneMore; phoneJump = false"
+            >
+              <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M6 10a2 2 0 1 1 0 4 2 2 0 0 1 0-4zm6 0a2 2 0 1 1 0 4 2 2 0 0 1 0-4zm6 0a2 2 0 1 1 0 4 2 2 0 0 1 0-4z"/></svg>
+            </button>
+            <div v-if="phoneMore" class="reader-more-backdrop" @click="phoneMore = false" />
+            <div v-if="phoneMore" class="reader-more-menu card" role="menu">
+              <button v-if="isPaper" role="menuitem" :disabled="!pageCount" @click="phoneMoreAction(() => openRight('translate'))">{{ t('paper.openTranslate') }}</button>
+              <button v-if="isPaper && bdSupported" role="menuitem" @click="phoneMoreAction(openBabeldoc)">{{ t('paper.bdButton') }}</button>
+              <button role="menuitem" @click="phoneMoreAction(saveDocumentAs)">{{ t('reader.saveAs') }}</button>
+              <button role="menuitem" @click="phoneMoreAction(openProperties)">{{ t('reader.properties') }}</button>
+              <button
+                role="menuitemcheckbox"
+                class="more-check"
+                :aria-checked="settings.reader.portraitScroll"
+                :title="t('reader.portraitScrollTitle')"
+                @click="phoneMoreAction(() => { settings.reader.portraitScroll = !settings.reader.portraitScroll })"
+              >
+                <span>{{ t('reader.portraitScrollMenu') }}</span>
+                <svg v-if="settings.reader.portraitScroll" viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M4.5 10.5l3.5 3.5 7.5-8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div v-else class="paper-context-actions">
           <template v-if="isPaper">
             <button
               class="btn btn-sm context-action"
@@ -3707,7 +3953,7 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <div class="pdf-toolbar paper-actions">
+      <div v-if="!isPhone" class="pdf-toolbar paper-actions">
         <div class="toolbar-group">
           <button
             class="icon-btn"
@@ -4208,6 +4454,7 @@ onBeforeUnmount(() => {
           class="reflow-scroll"
           :style="reflowStyle"
           @scroll.passive="onReflowScroll"
+          @click="onViewportClick"
         >
           <div v-if="reflowBuilding" class="reflow-progress">
             {{ t('reader.reflowBuilding', { current: reflowProcessed, total: pageCount }) }}
@@ -4249,6 +4496,7 @@ onBeforeUnmount(() => {
           @touchmove="onPdfTouchMove"
           @touchend="onPdfTouchEnd"
           @scroll.passive="scheduleCurrentTocPositionUpdate"
+          @click="onViewportClick"
           @contextmenu.prevent
         >
           <div class="spread-host">
@@ -4298,6 +4546,7 @@ onBeforeUnmount(() => {
           @touchstart="onPdfTouchStart"
           @touchmove="onPdfTouchMove"
           @touchend="onPdfTouchEnd"
+          @click="onViewportClick"
           @contextmenu.prevent
         >
           <div v-for="group in scrollPageGroups" :key="group.join('-')" class="scroll-spread-host">
@@ -4596,7 +4845,7 @@ onBeforeUnmount(() => {
         <button class="btn btn-sm" :disabled="ttsState === 'stopped'" @click="stopTTS"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><rect x="6.5" y="6.5" width="11" height="11" rx="2" fill="currentColor"/></svg>{{ t('common.stop') }}</button>
         <button class="icon-btn" :title="t('common.close')" @click="ttsPanel = false; stopTTS()" :aria-label="t('common.close')"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M6.3 6.3a1 1 0 0 1 1.4 0L12 10.58l4.3-4.3a1 1 0 1 1 1.4 1.42L13.42 12l4.3 4.3a1 1 0 0 1-1.42 1.4L12 13.42l-4.3 4.3a1 1 0 0 1-1.4-1.42L10.58 12l-4.3-4.3a1 1 0 0 1 0-1.4z"/></svg></button>
       </div>
-      <div class="tts-row">
+      <div class="tts-row tts-rate-row">
         <label>{{ t('tts.rate') }}</label>
         <LevelSlider
           v-model="settings.ttsRate"
@@ -4675,6 +4924,134 @@ onBeforeUnmount(() => {
         <button class="icon-btn" :title="t('common.stop')" @click="autoPanel = false; stopAutoRead()" :aria-label="t('common.stop')"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M6.3 6.3a1 1 0 0 1 1.4 0L12 10.58l4.3-4.3a1 1 0 1 1 1.4 1.42L13.42 12l4.3 4.3a1 1 0 0 1-1.42 1.4L12 13.42l-4.3 4.3a1 1 0 0 1-1.4-1.42L10.58 12l-4.3-4.3a1 1 0 0 1 0-1.4z"/></svg></button>
       </section>
     </Transition>
+
+    <template v-if="isPhone && !loading && !error && !presentationMode">
+      <!-- 手机面板为底部抽屉, 点遮罩收起 -->
+      <div v-if="phoneSheetOpen" class="phone-scrim" aria-hidden="true" @click="closePhoneSheets" />
+
+      <!-- 手机底栏: 页码进度 + 常用入口 -->
+      <footer class="phone-footer" :class="{ hidden: !phoneBars }">
+        <div class="phone-progress">
+          <button class="icon-btn" :title="t('reader.prevPage')" :aria-label="t('reader.prevPage')" :disabled="atFirstPage" @click="prevPage">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M14.7 5.3a1 1 0 0 1 0 1.4L9.42 12l5.3 5.3a1 1 0 0 1-1.42 1.4l-6-6a1 1 0 0 1 0-1.4l6-6a1 1 0 0 1 1.42 0z"/></svg>
+          </button>
+          <div class="phone-slider-wrap">
+            <input
+              class="phone-slider"
+              type="range"
+              min="1"
+              :max="Math.max(1, pageCount)"
+              step="1"
+              :value="phonePage"
+              :aria-label="t('reader.progress')"
+              :aria-valuetext="`${phonePage} / ${pageCount}`"
+              @input="onPhoneSlideInput"
+              @change="onPhoneSlideChange"
+              @blur="slidePage = null"
+            />
+            <div
+              v-if="slidePage !== null"
+              class="phone-slide-bubble"
+              :style="{ left: `clamp(64px, ${pageCount > 1 ? ((slidePage - 1) / (pageCount - 1)) * 100 : 0}%, calc(100% - 64px))` }"
+              aria-hidden="true"
+            >
+              <strong v-if="tocLabelAt(slidePage)">{{ tocLabelAt(slidePage) }}</strong>
+              <span>{{ slidePage }} / {{ pageCount }}</span>
+            </div>
+          </div>
+          <button class="icon-btn" :title="t('reader.nextPage')" :aria-label="t('reader.nextPage')" :disabled="atLastPage" @click="nextPage">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M9.3 5.3a1 1 0 0 1 1.4 0l6 6a1 1 0 0 1 0 1.4l-6 6a1 1 0 0 1-1.4-1.4l5.29-5.3-5.3-5.3a1 1 0 0 1 0-1.4z"/></svg>
+          </button>
+          <button
+            class="phone-page-label"
+            :class="{ active: phoneJump }"
+            :title="t('reader.jumpTo')"
+            :aria-label="`${t('reader.jumpTo')} · ${currentPage} / ${pageCount}`"
+            :aria-expanded="phoneJump"
+            @click="togglePhoneJump"
+          >
+            <b>{{ currentPage }}</b><span>/{{ pageCount }}</span>
+          </button>
+        </div>
+        <nav class="phone-dock" :aria-label="t('reader.readerTools')">
+          <button :class="{ active: tocOpen }" @click="phoneDock('toc')">
+            <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M4 6a1 1 0 0 1 1-1h1a1 1 0 0 1 0 2H5a1 1 0 0 1-1-1zm5 0a1 1 0 0 1 1-1h9a1 1 0 1 1 0 2h-9a1 1 0 0 1-1-1zM4 12a1 1 0 0 1 1-1h1a1 1 0 1 1 0 2H5a1 1 0 0 1-1-1zm5 0a1 1 0 0 1 1-1h9a1 1 0 1 1 0 2h-9a1 1 0 0 1-1-1zM4 18a1 1 0 0 1 1-1h1a1 1 0 1 1 0 2H5a1 1 0 0 1-1-1zm5 0a1 1 0 0 1 1-1h9a1 1 0 1 1 0 2h-9a1 1 0 0 1-1-1z"/></svg>
+            <span>{{ t('reader.toc') }}</span>
+          </button>
+          <button :class="{ active: thumbnailOpen }" @click="phoneDock('thumbnails')">
+            <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round" d="M4.5 4h6v7h-6zM13.5 4h6v4.5h-6zM13.5 11.5h6V20h-6zM4.5 14h6v6h-6z"/></svg>
+            <span>{{ t('reader.thumbnails') }}</span>
+          </button>
+          <button :class="{ active: annoOpen }" @click="phoneDock('annotations')">
+            <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M4 5.5A2.5 2.5 0 0 1 6.5 3H19a1 1 0 0 1 1 1v15a2 2 0 0 1-2 2H6.5A2.5 2.5 0 0 1 4 18.5v-13zM6.5 5a.5.5 0 0 0-.5.5v11.34c.16-.05.33-.08.5-.08H18V5H6.5z"/></svg>
+            <span>{{ t('reader.dockNotes') }}</span>
+          </button>
+          <button :class="{ active: ttsPanel || ttsState !== 'stopped' }" @click="phoneDock('tts')">
+            <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M12 3a7 7 0 0 0-7 7v1.1A3.5 3.5 0 0 0 3 14.5v2A3.5 3.5 0 0 0 6.5 20H8a1 1 0 0 0 1-1v-7a1 1 0 0 0-1-1h-.9A5 5 0 0 1 12 5a5 5 0 0 1 4.9 6H16a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h1.5a3.5 3.5 0 0 0 3.5-3.5v-2a3.5 3.5 0 0 0-2-3.16V10a7 7 0 0 0-7-7z"/></svg>
+            <span>{{ t('tts.title') }}</span>
+          </button>
+          <button :class="{ active: displaySheet || autoReading }" @click="phoneDock('display')">
+            <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M6 3.5h8.5L18 7v13.5H6zM14 3.5V7.5h4M9 12h6M9 15.5h6"/></svg>
+            <span>{{ t('reader.dockDisplay') }}</span>
+          </button>
+        </nav>
+      </footer>
+
+      <!-- 跳页: 输入页码 -->
+      <form v-if="phoneJump" class="phone-jump card" role="dialog" :aria-label="t('reader.jumpTo')" @submit.prevent="confirmPhoneJump">
+        <input
+          ref="phoneJumpInput"
+          v-model="pageInput"
+          class="input"
+          inputmode="numeric"
+          enterkeyhint="go"
+          autocomplete="off"
+          :aria-label="t('reader.jumpPagePlaceholder')"
+          :placeholder="t('reader.jumpPagePlaceholder')"
+          @keydown.esc.prevent="phoneJump = false"
+        />
+        <span class="phone-jump-total">/ {{ pageCount }}</span>
+        <button class="btn btn-primary btn-sm" type="submit">{{ t('reader.jumpGo') }}</button>
+      </form>
+
+      <!-- 显示: 翻页方式 / 适配 / 缩放 / 自动翻页 -->
+      <section v-if="displaySheet" class="phone-sheet display-sheet card" role="dialog" :aria-label="t('reader.pdfDisplay')">
+        <h3>{{ t('reader.pdfDisplay') }}</h3>
+        <div class="display-row">
+          <span>{{ t('reader.mode') }}</span>
+          <div class="seg">
+            <button type="button" :class="{ active: mode === 'scroll' }" :aria-pressed="mode === 'scroll'" @click="switchMode('scroll')">{{ t('reader.scrolled') }}</button>
+            <button type="button" :class="{ active: mode === 'paged' }" :aria-pressed="mode === 'paged'" @click="switchMode('paged')">{{ t('reader.paginated') }}</button>
+          </div>
+        </div>
+        <template v-if="pdfLayout === 'original'">
+          <div class="display-row">
+            <span>{{ t('reader.pdfFit') }}</span>
+            <div class="seg">
+              <button type="button" :class="{ active: zoom === 'fit-page' }" :aria-pressed="zoom === 'fit-page'" @click="setPagedFit('fitH')">{{ t('reader.fitHeight') }}</button>
+              <button type="button" :class="{ active: zoom === 'fit-width' }" :aria-pressed="zoom === 'fit-width'" @click="setPagedFit('fitW')">{{ t('reader.fitWidth') }}</button>
+            </div>
+          </div>
+          <div class="display-row">
+            <span>{{ t('reader.pdfZoom') }}</span>
+            <div class="zoom-stepper">
+              <button type="button" class="icon-btn" :title="t('reader.zoomOut')" :aria-label="t('reader.zoomOut')" @click="zoomStep(-1)">
+                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M5 11h14a1 1 0 1 1 0 2H5a1 1 0 1 1 0-2z"/></svg>
+              </button>
+              <output>{{ zoomLabel }}</output>
+              <button type="button" class="icon-btn" :title="t('reader.zoomIn')" :aria-label="t('reader.zoomIn')" @click="zoomStep(1)">
+                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 4a1 1 0 0 1 1 1v6h6a1 1 0 1 1 0 2h-6v6a1 1 0 1 1-2 0v-6H5a1 1 0 1 1 0-2h6V5a1 1 0 0 1 1-1z"/></svg>
+              </button>
+            </div>
+          </div>
+        </template>
+        <button type="button" class="display-action" :class="{ active: autoReading }" @click="phoneAutoRead">
+          <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="m7 5.25 7 4.75-7 4.75z" /></svg>
+          <span>{{ autoReading ? t('reader.autoReading') : t('reader.autoRead') }}</span>
+          <svg class="display-chevron" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M9.3 5.3a1 1 0 0 1 1.4 0l6 6a1 1 0 0 1 0 1.4l-6 6a1 1 0 0 1-1.4-1.4l5.29-5.3-5.3-5.3a1 1 0 0 1 0-1.4z"/></svg>
+        </button>
+      </section>
+    </template>
   </div>
 </template>
 
@@ -6806,6 +7183,456 @@ onBeforeUnmount(() => {
     position: static;
     padding-left: 0;
     box-shadow: none;
+  }
+
+  /* ---- 手机阅读: 与重排书阅读器一致的沉浸式顶栏 / 底栏 + 底部抽屉 ---- */
+  .paper.is-phone {
+    --phone-footer-h: calc(102px + var(--lr-safe-bottom));
+    position: relative;
+    overflow: hidden;
+    background: var(--surface-2);
+  }
+  .paper.is-phone .paper-header {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    border-bottom: 1px solid var(--border);
+    transition: transform var(--dur-slow) var(--ease), opacity var(--dur-slow) var(--ease);
+  }
+  .paper.is-phone .paper-header.phone-hidden {
+    transform: translateY(-100%);
+    opacity: 0;
+    pointer-events: none;
+  }
+  .paper.is-phone .paper-bar {
+    gap: 4px;
+    padding: 6px max(6px, var(--lr-safe-right)) 6px max(4px, var(--lr-safe-left));
+  }
+  .paper.is-phone .paper-document {
+    flex: 1 1 auto;
+    min-width: 0;
+    gap: 2px;
+  }
+  .paper.is-phone .paper-title strong {
+    font-weight: 600;
+  }
+  .phone-top-actions {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+  .paper.is-phone .icon-btn {
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+  }
+  .paper.is-phone .icon-btn:hover {
+    background: none;
+  }
+  .paper.is-phone .icon-btn:active {
+    background: var(--surface-2);
+  }
+  .paper.is-phone .icon-btn.icon-active {
+    color: var(--brand);
+  }
+  .paper.is-phone .reader-more-menu {
+    width: 208px;
+  }
+  .paper.is-phone .reader-more-menu button {
+    min-height: 44px;
+    font-size: 14px;
+  }
+  /* 工具栏收起后正文占满全屏; 只让开系统状态栏 / 手势条 */
+  .paper.is-phone .paper-split {
+    padding: var(--lr-safe-top) 0 var(--lr-safe-bottom);
+    background: var(--surface-2);
+  }
+  .paper.is-phone .pane-left:is(.is-fit-width, .is-fit-height) {
+    padding-bottom: 0;
+  }
+  .paper.is-phone .pdf-search {
+    top: 8px;
+    left: 8px;
+    right: 8px;
+    width: auto;
+    transition: top var(--dur-slow) var(--ease);
+  }
+  .paper.is-phone.phone-bars .pdf-search {
+    top: 60px;
+  }
+  .paper.is-phone .pdf-search-input {
+    font-size: 16px;
+  }
+  .paper.is-phone .back-pill {
+    left: 12px;
+    bottom: calc(16px + var(--lr-safe-bottom));
+  }
+  .paper.is-phone.phone-bars .back-pill {
+    bottom: calc(var(--phone-footer-h) + 10px);
+  }
+  .paper.is-phone .auto-panel {
+    left: 12px;
+    right: 12px;
+    bottom: calc(16px + var(--lr-safe-bottom));
+    transform: none;
+    flex-wrap: wrap;
+    z-index: 52;
+  }
+  .paper.is-phone.phone-bars .auto-panel {
+    bottom: calc(var(--phone-footer-h) + 10px);
+  }
+  .paper.is-phone .auto-panel .auto-speed-slider {
+    flex: 1 1 160px;
+    min-width: 0;
+  }
+  .paper.is-phone .auto-float-enter-from,
+  .paper.is-phone .auto-float-leave-to {
+    transform: translateY(8px);
+  }
+  /* 翻译 / AI 侧栏在手机上占满全屏, 盖住工具栏 */
+  .paper.is-phone .pane-right {
+    z-index: 60;
+    width: 100% !important;
+    padding-top: var(--lr-safe-top);
+    padding-bottom: var(--lr-safe-bottom);
+    border-left: 0;
+  }
+
+  .phone-footer {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 4px max(8px, var(--lr-safe-right)) calc(2px + var(--lr-safe-bottom)) max(8px, var(--lr-safe-left));
+    background: var(--card);
+    border-top: 1px solid var(--border);
+    color: var(--text);
+    transition: transform var(--dur-slow) var(--ease), opacity var(--dur-slow) var(--ease);
+  }
+  .phone-footer.hidden {
+    transform: translateY(100%);
+    opacity: 0;
+    pointer-events: none;
+  }
+  .phone-progress {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .phone-progress .icon-btn {
+    flex-shrink: 0;
+    color: var(--text-2);
+  }
+  .phone-progress .icon-btn:disabled {
+    opacity: 0.35;
+  }
+  .phone-slider-wrap {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+  }
+  .phone-slider {
+    width: 100%;
+    accent-color: var(--brand);
+  }
+  /* 拖动进度条时的落点预览: 章节 + 页码 */
+  .phone-slide-bubble {
+    position: absolute;
+    bottom: calc(100% + 12px);
+    transform: translateX(-50%);
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    max-width: 220px;
+    padding: 7px 12px;
+    border-radius: var(--radius-lg);
+    background: var(--card);
+    box-shadow: var(--shadow-lg);
+    color: var(--text-2);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+  .phone-slide-bubble strong {
+    max-width: 196px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .phone-page-label {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: baseline;
+    justify-content: flex-end;
+    gap: 1px;
+    min-width: 56px;
+    height: 40px;
+    padding: 0 6px;
+    border: none;
+    border-radius: var(--radius-pill);
+    background: none;
+    color: var(--text-3);
+    font-size: 12px;
+    line-height: 40px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .phone-page-label b {
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .phone-page-label.active,
+  .phone-page-label.active b {
+    background: var(--brand-soft);
+    color: var(--brand);
+  }
+  .phone-dock {
+    display: flex;
+  }
+  .phone-dock button {
+    flex: 1;
+    min-width: 0;
+    height: 54px;
+    border: none;
+    border-radius: 10px;
+    background: none;
+    color: var(--text-2);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    font-size: 11px;
+  }
+  .phone-dock button:active {
+    background: var(--surface-2);
+  }
+  .phone-dock button.active {
+    color: var(--brand);
+  }
+
+  .phone-scrim {
+    position: absolute;
+    inset: 0;
+    z-index: 55;
+    background: var(--overlay);
+    animation: phone-scrim-in var(--dur) var(--ease);
+  }
+  .phone-jump {
+    position: absolute;
+    left: 12px;
+    right: 12px;
+    bottom: calc(var(--phone-footer-h) + 8px);
+    z-index: 56;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-lg);
+  }
+  .phone-jump .input {
+    flex: 1;
+    min-width: 0;
+    height: 40px;
+    /* 16px 以下 iOS 会在聚焦时放大页面 */
+    font-size: 16px;
+  }
+  .phone-jump-total {
+    color: var(--text-3);
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* 底部抽屉: 目录 / 缩略图 / 笔记 (共用侧栏), 听书, 显示 */
+  .paper.is-phone .side-drawer,
+  .paper.is-phone .tts-panel,
+  .phone-sheet {
+    position: absolute;
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 60;
+    width: auto;
+    transform: none;
+    border: none;
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+    box-shadow: var(--shadow-lg);
+    animation: phone-sheet-up var(--dur-slow) var(--ease);
+  }
+  .paper.is-phone .side-drawer {
+    height: 72%;
+    padding: 14px max(4px, var(--lr-safe-right)) var(--lr-safe-bottom) max(4px, var(--lr-safe-left));
+  }
+  .paper.is-phone .drawer-head {
+    border-bottom-color: transparent;
+  }
+  .paper.is-phone .drawer-tabs {
+    gap: 20px;
+  }
+  .paper.is-phone .drawer-tabs button {
+    font-size: 15px;
+  }
+  .paper.is-phone .thumbnail-drawer {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+    align-content: start;
+    gap: 12px;
+  }
+  .paper.is-phone .tts-panel {
+    position: absolute;
+    max-height: 78%;
+    overflow-y: auto;
+    gap: 16px;
+    padding: 22px max(16px, var(--lr-safe-right)) calc(16px + var(--lr-safe-bottom)) max(16px, var(--lr-safe-left));
+  }
+  .paper.is-phone .tts-row label {
+    width: 40px;
+  }
+  /* 语速档位标签较密: 滑杆独占一行 */
+  .paper.is-phone .tts-rate-row {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+  .paper.is-phone .tts-rate-row label {
+    flex: 1;
+  }
+  .paper.is-phone .tts-rate-row .tts-value {
+    order: 1;
+  }
+  .paper.is-phone .tts-rate-row > :not(label, .tts-value) {
+    order: 2;
+    flex: 1 1 100%;
+  }
+  .paper.is-phone .seg button {
+    height: 36px;
+    font-size: 13px;
+  }
+  .phone-sheet {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 22px max(16px, var(--lr-safe-right)) calc(14px + var(--lr-safe-bottom)) max(16px, var(--lr-safe-left));
+  }
+  .phone-sheet h3 {
+    margin: 0 0 4px;
+    color: var(--text);
+    font-size: 16px;
+    font-weight: 600;
+  }
+  /* 抽屉顶部的拖拽指示条 */
+  .paper.is-phone .side-drawer::before,
+  .paper.is-phone .tts-panel::before,
+  .phone-sheet::before {
+    content: '';
+    position: absolute;
+    top: 7px;
+    left: 50%;
+    width: 36px;
+    height: 4px;
+    margin-left: -18px;
+    border-radius: 2px;
+    background: var(--border-strong);
+  }
+  .display-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 52px;
+    color: var(--text-2);
+    font-size: 14px;
+  }
+  .display-row > span {
+    flex-shrink: 0;
+  }
+  .display-row .seg {
+    flex: 0 1 220px;
+    min-width: 0;
+    border-radius: 9px;
+  }
+  .zoom-stepper {
+    flex: 0 1 220px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 2px;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+  }
+  .zoom-stepper .icon-btn {
+    width: 40px;
+    height: 34px;
+    border-radius: 7px;
+  }
+  .zoom-stepper output {
+    color: var(--text);
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+  }
+  .display-action {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 52px;
+    margin-top: 4px;
+    padding: 0 2px;
+    border: none;
+    border-top: 1px solid var(--border);
+    background: none;
+    color: var(--text);
+    font-size: 14px;
+    text-align: left;
+  }
+  .display-action > span {
+    flex: 1;
+  }
+  .display-action.active {
+    color: var(--brand);
+  }
+  .display-chevron {
+    color: var(--text-3);
+  }
+}
+@keyframes phone-sheet-up {
+  from {
+    transform: translateY(40px);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+@keyframes phone-scrim-in {
+  from {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .paper.is-phone .paper-header,
+  .phone-footer,
+  .phone-scrim,
+  .phone-sheet,
+  .paper.is-phone .side-drawer,
+  .paper.is-phone .tts-panel {
+    transition: none;
+    animation: none;
   }
 }
 </style>

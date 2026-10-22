@@ -21,6 +21,7 @@ npm run test:paper-agent    # 论文 Agent 前端契约 (node --test)
 npm run test:paper-context / test:keyboard-shortcuts / test:archive
 npm run test:sync-merge / test:sync-engine / test:sync-account / test:sync-settings   # 多端同步: 合并纯函数 + 引擎 + 账号 + 设置同步 (假存储/假远端)
 npm run test:sync-large-files   # 同步大文件: 分块 SHA-256 / 原生算指纹不读文件 / 暂存文件下载与校验
+npm run test:chunked-write   # 导入大文件分块写盘 (安卓 IPC 不整本传字节, issue #14)
 npm run test:reading-log    # 阅读记录: 计时规则 + 每日统计 + 多端同步往返
 npm run test:compat / test:tts   # 旧 WebView 兼容 (构建目标/polyfill/CSS 回退); 离线听书调度
 npm run test:reader-pages / test:listen-eta   # 重排书页码 (实测+推算/双栏/跳页往返); 听书剩余时间 (语速学习/人话时长)
@@ -84,6 +85,7 @@ sync-server/           轻阅账号后端 (Cloudflare Worker + D1 + R2, sync.jia
 
 ## 约定
 
+- **能用 Rust 就用 Rust（2026-10-22 用户要求）**：文件读写、哈希、下载、格式解析等重活优先写成 `src-tauri/src/` 的原生命令，提升质量与性能；前端只做界面和编排。安卓 WebView 的 IPC 会把字节数组序列化成 JSON 数字数组，大文件不要整本经 `plugin-fs` 进出 JS（导入走 `library_file_write_chunk`，同步走 `library_file_download` / `library_file_sha256`，见 issue #14）。网页版没有原生层，保留 JS 实现作回退。
 - **样式只用语义令牌**（`--bg --card --surface-2 --text --text-2 --text-3 --border --brand --brand-light --danger --success …`），不要在组件里写裸色值。深色模式通过 `<html data-theme="dark">` 重定义令牌实现，由 `services/appearance.ts` 依据 `settings.appearance` (system/light/dark) 写入。
 - 全局类 `.segmented` 是设置页等的分段控件；阅读器工具栏各自有 scoped 的 `.seg`，不要合并。
 - 图标一律内联 SVG（`aria-hidden="true"`），不用 emoji 当图标；图标按钮必须有 `aria-label`/`title`。

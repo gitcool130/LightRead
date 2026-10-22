@@ -2318,6 +2318,7 @@ dependencies = [
 name = "lightread"
 version = "1.19.4"
 dependencies = [
+ "base64 0.22.1",
  "bzip2 0.5.2",
  "fontdb",
  "futures-util",

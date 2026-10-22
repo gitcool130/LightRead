@@ -120,6 +120,12 @@ const sceneNames = computed(() => {
   return names.join(t('reader.sceneSep'))
 })
 
+/** 「更多」收起时在行尾显示里面的当前值, 不用展开就知道设了什么 */
+const moreTextSummary = computed(() => [
+  `${t('reader.letterSpacing')} ${reader.letterSpacing.toFixed(2)}em`,
+  t(reader.justify ? 'reader.justifyOn' : 'reader.justifyOff'),
+].join(' · '))
+
 // ---- 「更多」折叠: 按设备记住展开状态 (只是便利, 读不到就收起) ----
 const MORE_KEY = 'lightread-typography-more'
 function loadMore(): { text: boolean } {
@@ -212,7 +218,8 @@ let systemFontsLoading = false
       </div>
       <details class="tp-more" :open="more.text" @toggle="onMoreToggle('text', $event)">
         <summary>
-          <span>{{ t('reader.more') }}</span>
+          <span class="tp-more-label">{{ t('reader.moreTextOptions') }}</span>
+          <span v-if="!more.text" class="tp-more-value">{{ moreTextSummary }}</span>
           <svg class="tp-chev" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M6.3 9.3a1 1 0 0 1 1.4 0L12 13.58l4.3-4.3a1 1 0 1 1 1.4 1.42l-5 5a1 1 0 0 1-1.4 0l-5-5a1 1 0 0 1 0-1.4z"/></svg>
         </summary>
         <div class="tp-more-body">
@@ -450,7 +457,7 @@ let systemFontsLoading = false
   text-align: center;
   padding: 0 4px;
 }
-.set-row select.input {
+.set-row .app-select-trigger {
   flex: 1;
   min-width: 0;
   height: 32px;
@@ -618,21 +625,39 @@ let systemFontsLoading = false
   background: var(--brand-light);
   color: var(--brand);
 }
-.tp-more {
-  margin-top: -4px;
-}
+/* 「更多文字设置」: 与上面各行左对齐的整行入口, 行尾显示收起项的当前值 */
 .tp-more summary {
   display: flex;
   align-items: center;
-  gap: 4px;
-  width: fit-content;
-  min-height: 28px;
-  padding-left: 50px;
+  gap: 8px;
+  min-height: 32px;
+  border-radius: var(--radius-sm);
   list-style: none;
   cursor: pointer;
-  font-size: 12px;
-  color: var(--text-3);
+  font-size: 13px;
+  color: var(--text-2);
   user-select: none;
+}
+.tp-more-label {
+  flex-shrink: 0;
+}
+.tp-more-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-3);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.tp-more[open] .tp-more-label {
+  flex: 1;
+}
+.tp-chev {
+  flex-shrink: 0;
+  color: var(--text-3);
 }
 .tp-more summary::-webkit-details-marker {
   display: none;
@@ -642,6 +667,9 @@ let systemFontsLoading = false
 }
 .tp-chev {
   transition: transform var(--dur) var(--ease);
+}
+.tp-more summary:hover .tp-chev {
+  color: var(--brand);
 }
 .tp-more[open] .tp-chev {
   transform: rotate(180deg);
@@ -681,18 +709,15 @@ let systemFontsLoading = false
     width: 44px;
   }
   .set-num,
-  .set-row select.input {
+  .set-row .app-select-trigger {
     height: 44px;
   }
   .theme-btn {
     width: 44px;
     height: 44px;
   }
-  .tp-more {
-    margin-top: -8px;
-  }
   .tp-more summary {
-    min-height: 40px;
+    min-height: 44px;
   }
   .tp-more-body {
     padding-top: 2px;
@@ -732,7 +757,8 @@ let systemFontsLoading = false
     border-radius: 2px;
     background: var(--border-strong);
   }
-  .set-row {
+  .set-row,
+  .tp-more summary {
     font-size: 14px;
   }
   /* 16px 以下 iOS 聚焦时会放大页面 */

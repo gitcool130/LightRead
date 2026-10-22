@@ -7,6 +7,7 @@ import type {
   AnnotationRec, BooklistRec, BooklistWantedRec, BookMeta, CatalogSourceRec, LibraryStorage, LocalFileRef, NewBookMeta,
 } from './types'
 import { BUILTIN_SOURCES, getLibraryRoot, newId } from './types'
+import { needsChunkedIpc, writeBlobInChunks } from './chunkedWrite'
 
 type SqlDatabase = {
   execute(sql: string, values?: unknown[]): Promise<unknown>
@@ -227,12 +228,25 @@ export class TauriStorage implements LibraryStorage {
 
   async addBook(meta: NewBookMeta, file: Blob, cover?: Blob) {
     const id = newId()
-    {
-      const [path, opts] = this.loc(this.bookPath(id, meta.fileName))
-      await this.fs.writeFile(path, new Uint8Array(await file.arrayBuffer()), opts)
-    }
+    await this.writeBookFile(this.bookPath(id, meta.fileName), file)
     await this.insertBook(id, meta, cover)
     return id
+  }
+
+  /** 写书籍文件. 安卓分块交给原生层写 (见 chunkedWrite.ts), 桌面 IPC 可直接传字节 */
+  private async writeBookFile(rel: string, file: Blob) {
+    if (!needsChunkedIpc()) {
+      const [path, opts] = this.loc(rel)
+      await this.fs.writeFile(path, new Uint8Array(await file.arrayBuffer()), opts)
+      return
+    }
+    try {
+      await writeBlobInChunks(file, (offset, data) =>
+        this.libraryFile('library_file_write_chunk', { rel, offset, data }))
+    } catch (e) {
+      await this.libraryFile('library_file_remove', { rel }).catch(() => { /* 半截文件清理失败不掩盖原错误 */ })
+      throw e
+    }
   }
 
   /** 写封面并插入书目行 (书籍文件已就位) */
@@ -296,12 +310,10 @@ export class TauriStorage implements LibraryStorage {
       const from = old && this.bookPath(id, old.fileName)
       const to = this.bookPath(id, patch.fileName)
       if (from && from !== to) {
+        // 原生改名, 书的内容不经过 WebView; 旧文件缺失时照旧只改元数据
         const [fromPath, fromOpts] = this.loc(from)
-        const [toPath, toOpts] = this.loc(to)
-        const bytes = await this.fs.readFile(fromPath, fromOpts).catch(() => null)
-        if (bytes) {
-          await this.fs.writeFile(toPath, bytes, toOpts)
-          await this.fs.remove(fromPath, fromOpts).catch(() => { /* 旧文件残留不影响使用 */ })
+        if (await this.fs.exists(fromPath, fromOpts).catch(() => false)) {
+          await this.libraryFile('library_file_rename', { from, to })
         }
       }
     }

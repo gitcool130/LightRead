@@ -31,6 +31,8 @@ tauri-plugin-opener = "2"
 tokio-tungstenite = { version = "0.29.0", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3.32"
 sha2 = "0.10.9"
+# 导入时分块写书 (library_files.rs): 安卓 IPC 上 base64 比 JSON 数字数组小 3 倍多
+base64 = "0.22"
 uuid = { version = "1.20.0", features = ["v4"] }
 libc = "0.2"
 tokio = { version = "1.52.3", features = ["macros", "rt", "sync", "time"] }

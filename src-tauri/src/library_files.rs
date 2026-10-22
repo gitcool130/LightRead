@@ -5,12 +5,14 @@
 //!  - `library_file_sha256`: 流式读盘算 SHA-256, 内存占用与文件大小无关;
 //!  - `library_file_download`: 流式下载到书库里的暂存文件 (`books/<名字>`), 边下边算 SHA-256,
 //!    前端比对后再 `library_file_rename` 成正式文件, 不通过则 `library_file_remove`.
+//!  - `library_file_write_chunk`: 导入时 WebView 里的书 (只有 File 对象, 没有路径) 分块以 base64 传入
+//!    追加写盘. 一次性 `writeFile` 会把整本书变成 JSON 数字数组, 40 MB 的 PDF 就能让平板卡死闪退 (issue #14).
 //! 路径规则与上传命令相同 (见 http_upload.rs 的 `resolve_library_file`): 只能是书库的
 //! `books/<文件名>` / `covers/<文件名>`. 错误字符串以 `timeout:` / `network:` / `file:` / `request:` 前缀区分.
 
 use std::{
   collections::BTreeMap,
-  io::{Read, Write},
+  io::{Read, Seek, SeekFrom, Write},
   path::Path,
   time::Duration,
 };
@@ -89,6 +91,23 @@ pub async fn download_to(spec: &UploadSpec, dest: &Path, stall: Duration) -> Res
   result
 }
 
+/// 在 `offset` 处写入一块: 0 表示新建 (清空旧内容), 否则必须正好接在已写内容之后,
+/// 防止重试或乱序把文件拼错 (与 Tauri 无关, 便于单测). 返回写完后的文件长度.
+pub fn write_chunk(path: &Path, offset: u64, bytes: &[u8]) -> Result<u64, String> {
+  let mut file = if offset == 0 {
+    std::fs::File::create(path)
+  } else {
+    std::fs::OpenOptions::new().write(true).open(path)
+  }
+  .map_err(|e| format!("file: {e}"))?;
+  let len = file.seek(SeekFrom::End(0)).map_err(|e| format!("file: {e}"))?;
+  if len != offset {
+    return Err(format!("file: 写入位置不连续 (已有 {len} 字节, 请求写在 {offset})"));
+  }
+  file.write_all(bytes).map_err(|e| format!("file: {e}"))?;
+  Ok(offset + bytes.len() as u64)
+}
+
 fn library_path(app: &tauri::AppHandle, root: String, rel: String) -> Result<std::path::PathBuf, String> {
   resolve_library_file(app.path().app_data_dir().ok(), &FileRef { root, rel })
 }
@@ -135,6 +154,26 @@ pub fn library_file_remove(app: tauri::AppHandle, root: String, rel: String) -> 
     Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(format!("file: {e}")),
     _ => Ok(()),
   }
+}
+
+#[tauri::command]
+pub async fn library_file_write_chunk(
+  app: tauri::AppHandle,
+  root: String,
+  rel: String,
+  offset: u64,
+  data: String,
+) -> Result<u64, String> {
+  use base64::Engine as _;
+  let path = library_path(&app, root, rel)?;
+  tauri::async_runtime::spawn_blocking(move || {
+    let bytes = base64::engine::general_purpose::STANDARD
+      .decode(data.as_bytes())
+      .map_err(|e| format!("request: base64 无效: {e}"))?;
+    write_chunk(&path, offset, &bytes)
+  })
+  .await
+  .map_err(|e| format!("file: {e}"))?
 }
 
 #[cfg(test)]
@@ -207,5 +246,23 @@ mod tests {
     let err = download_to(&spec(url), &dest, Duration::from_millis(300)).await.unwrap_err();
     assert!(err.starts_with("timeout:"), "{err}");
     assert!(!dest.exists());
+  }
+
+  #[test]
+  fn writes_chunks_in_order_and_rejects_gaps() {
+    let path = temp("chunks");
+    std::fs::write(&path, b"stale content").unwrap();
+    assert_eq!(write_chunk(&path, 0, b"abc").unwrap(), 3);
+    assert_eq!(write_chunk(&path, 3, b"defg").unwrap(), 7);
+    // 重试已写过的块 / 跳过一块都拒绝, 文件保持原样
+    assert!(write_chunk(&path, 3, b"defg").unwrap_err().starts_with("file:"));
+    assert!(write_chunk(&path, 9, b"x").unwrap_err().starts_with("file:"));
+    assert_eq!(std::fs::read(&path).unwrap(), b"abcdefg");
+    // 非 0 偏移不会凭空建文件
+    let missing = temp("chunks-missing");
+    let _ = std::fs::remove_file(&missing);
+    assert!(write_chunk(&missing, 5, b"x").is_err());
+    assert!(!missing.exists());
+    let _ = std::fs::remove_file(&path);
   }
 }

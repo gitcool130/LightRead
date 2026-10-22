@@ -26,6 +26,7 @@
     "test:sync-settings": "node --experimental-strip-types --test scripts/test-sync-settings.mjs",
     "test:sync-account": "node --experimental-strip-types --test scripts/test-sync-account.mjs",
     "test:sync-large-files": "node --experimental-strip-types --test scripts/test-sync-large-files.mjs",
+    "test:chunked-write": "node --experimental-strip-types --test scripts/test-chunked-write.mjs",
     "test:reading-log": "node --experimental-strip-types --test scripts/test-reading-log.mjs",
     "test:paper-context": "node --experimental-strip-types --test scripts/test-paper-translation-context.mjs",
     "test:paper-agent": "node --experimental-strip-types --test scripts/test-paper-agent-context.mjs scripts/test-paper-agent-ten-questions.mjs",
