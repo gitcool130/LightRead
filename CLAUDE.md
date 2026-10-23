@@ -34,6 +34,11 @@
 - 存储: `src/storage/` 的 `LibraryStorage` 抽象 — 桌面 `tauri.ts` (文件 + SQLite)，网页 `dexie.ts` (IndexedDB)
 - 无 UI 组件库、无 Tailwind：样式全部是手写 CSS + `src/styles/main.css` 里的设计令牌
 
+## 构建机 (2026-10-22 用户要求)
+
+编译、测试、打包等重活一律放 **t9 服务器** (`ssh t9`, 本机隧道 127.0.0.1:2203, 用户 jiangshu, 8 核 / 约 380 GB 空闲), 避免占用本机性能和磁盘。
+t9 的 Rust 在 `~/.cargo/bin`, 非交互 shell 不在 PATH, 远程执行先 `source ~/.cargo/env` (或 `bash -lc`)。本机只做编辑、轻量检查和 git。
+
 ## 常用命令
 
 ```bash
