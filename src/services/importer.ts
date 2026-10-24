@@ -1,4 +1,4 @@
-import { getStorage, type NewBookMeta } from '../storage'
+import { getStorage, type LocalFileRef, type NewBookMeta } from '../storage'
 import { t } from '../i18n'
 import { detectFormat, isFoliateNative, isTextLike } from './format'
 import { detectReadableFormat, looksLikeText } from './plainText'
@@ -85,6 +85,7 @@ export async function importFile(
   file: File,
   source = '本地导入',
   overrides?: MetaOverrides,
+  staged?: LocalFileRef,
 ): Promise<ImportResult> {
   let format = detectReadableFormat(file.name)
   // 书籍格式以外的文本 (含认不出扩展名的): 看内容确实是文本才按 txt 收, 二进制照旧拒绝
@@ -146,8 +147,26 @@ export async function importFile(
   meta.kind = overrides?.kind ?? 'book'
 
   const storage = await getStorage()
-  const bookId = await storage.addBook(meta, file, cover)
+  const bookId = staged && storage.addBookFromStaged
+    ? await storage.addBookFromStaged(meta, staged, cover)
+    : await storage.addBook(meta, file, cover)
   return { ok: true, fileName: file.name, bookId }
+}
+
+/** 本地路径由 Rust 复制到书库; 解析读取暂存快照, 不再把整本书从 JS 写回磁盘。 */
+export interface NativeImportFile { name: string; absPath: string }
+export async function importNativeFile(item: NativeImportFile, source = '本地导入', overrides?: MetaOverrides): Promise<ImportResult> {
+  const storage = await getStorage()
+  if (!storage.stageBookFromPath || !storage.addBookFromStaged || !storage.discardStaged) {
+    throw new Error('Native import storage unavailable')
+  }
+  const staged = await storage.stageBookFromPath(item.absPath)
+  try {
+    const file = new File([await staged.blob()], item.name)
+    return await importFile(file, source, overrides, staged)
+  } finally {
+    await storage.discardStaged(staged).catch(error => console.warn('[import cleanup]', error))
+  }
 }
 
 /** 延迟读取的文件 (桌面端选文件夹导入: 导到这一本时才从磁盘读出) */
@@ -158,7 +177,7 @@ export interface LazyImportFile {
 
 /** 批量导入 */
 export async function importFiles(
-  files: Iterable<File | LazyImportFile>,
+  files: Iterable<File | LazyImportFile | NativeImportFile>,
   source = '本地导入',
   onProgress?: (done: number, total: number, current: string) => void,
   overrides?: MetaOverrides,
@@ -169,7 +188,9 @@ export async function importFiles(
   for (const item of list) {
     onProgress?.(done, list.length, item.name)
     try {
-      results.push(await importFile('load' in item ? await item.load() : item, source, overrides))
+      results.push('absPath' in item
+        ? await importNativeFile(item, source, overrides)
+        : await importFile('load' in item ? await item.load() : item, source, overrides))
     } catch (error: any) {
       // 单本存储失败也要继续其余文件，并让界面能正常退出进度状态。
       results.push({ ok: false, fileName: item.name, error: error?.message ?? '文件保存失败' })

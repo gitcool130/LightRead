@@ -7,6 +7,7 @@ mod edge_tts;
 mod fonts;
 mod http_upload;
 mod library_files;
+mod library_import;
 mod local_tts;
 mod tts_device;
 
@@ -162,6 +163,8 @@ pub fn run() {
       edge_tts::edge_tts_synthesize,
       fonts::list_system_fonts,
       http_upload::http_upload,
+      library_import::library_import_scan,
+      library_import::library_import_copy,
       library_files::library_file_sha256,
       library_files::library_file_download,
       library_files::library_file_rename,
