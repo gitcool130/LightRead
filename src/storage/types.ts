@@ -139,6 +139,8 @@ export interface LibraryStorage {
    * 书由原生层直接下载到这里, 校验通过后 addBookFromStaged 收为新书, 否则 discardStaged.
    */
   stageBookFile?(tag: string): Promise<LocalFileRef>
+  /** 原生复制本地文件到暂存区, 不通过 JS 回传文件内容。 */
+  stageBookFromPath?(path: string): Promise<LocalFileRef>
   addBookFromStaged?(meta: NewBookMeta, staged: LocalFileRef, cover?: Blob): Promise<string>
   discardStaged?(staged: LocalFileRef): Promise<void>
   /** 返回可直接用于 <img src> 的 URL (Object URL), 由调用方缓存, 无封面返回 undefined */

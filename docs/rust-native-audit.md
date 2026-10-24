@@ -12,7 +12,7 @@
 | **换书库文件夹** | `library_files.rs` `library_migrate` | `std::fs::copy`, Channel 回报进度 |
 | **改名 / 文件大小** | `library_file_rename` `library_file_size` | 同步改文件名不再整本读写 |
 | **上传 (同步 / 互传)** | `http_upload.rs` | 从磁盘流式上传, 显式 Content-Length, `http_upload_file` 带进度 |
-| **选择文件夹扫描** | `folder_scan.rs` | 一次 IPC 递归遍历 + 大小 / 修改时间 |
+| **拖入 / 选择文件夹与本地文件导入** | `library_import.rs`（`folder_scan.rs` 保留兼容接口） | 原生拖放路径批量扫描，递归目录、重叠路径去重、错误与深度限制反馈；Rust 直接复制到书库暂存区，索引失败清理；不再从 JS 整本回写 |
 | **CBR → CBZ (桌面)** | `comic.rs` | 导入时 UnRAR 原生解包一次 (顺带取封面), store CBZ 缓存在 `books/<id>.cbr.cbz`, 打开直接读缓存; 删书一并删除; 移动端 / 网页仍用 unrar wasm |
 | **TXT (正文) → EPUB (桌面)** | `txt_epub.rs` | 解码 / 分章 / 段落还原 / XHTML / 打包与前端 `convertToEpub` 逐字节一致 (`testdata/txt-epub-golden.json` 10 组样本, `scripts/gen-txt-epub-golden.mjs` 重新生成); 转换一次缓存为 `<书文件>.v<版式>.epub`, 版式变化自动失效; 代码视图 TXT / Markdown / HTML 仍在前端 (marked / DOMParser) |
 | **导入 EPUB 元数据 + 封面 (桌面)** | `epub_meta.rs` | 与 foliate getMetadata / 封面查找 + importer flattenMeta 一致 (`testdata/epub-meta-golden.json` 12 组, `scripts/gen-epub-meta-golden.mjs` 用 foliate 生成); 有意不复刻 foliate 对缺失封面文件返回 4 字节垃圾 Blob 的问题; 失败退回 foliate |

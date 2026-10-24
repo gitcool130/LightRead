@@ -70,6 +70,8 @@ npm run test:book-sources    # 公共书源: 查询归一 / 哲学文库·研辞
 node scripts/build-philosophy-index.mjs   # 重新生成哲学文库离线索引 src/data/philosophy-index.json (限速抓目录页, 约 5 分钟)
 node scripts/build-wendian-index.mjs      # 重新生成研辞问典离线书目 src/data/wendian-index.json (sitemap + 分类列表页, ≤1 次/秒, 约 17 分钟; 不碰站内搜索)
 npm run test:opds-library / test:library-upload   # 自建书库: 连接信息解析·搜索发现·EPUB 优先; 上传协议
+npm run test:native-drop    # 桌面原生拖放事件与批次队列; e2e:native-drop 连接 Vite dev, 模拟 IPC 验证导入全流程
+cargo test --manifest-path src-tauri/Cargo.toml library_import --lib  # Rust 文件/文件夹扫描与复制暂存 (在 t9 执行)
 npm run test:folder-pick / e2e:folder-pick   # 选择文件夹导入 / 上传: 递归找书 + 按格式推荐度去重
 npm run e2e:continuous-scroll   # 跨章连续滚动: 逐帧触摸 + 惯性跨章, 无回跳 / 预载 / 插入上方不跳 (设计见 docs/continuous-scroll.md)
 npm run test:plain-text      # 通用纯文本: 源码/配置/日志/无扩展名文件识别 · 内容嗅探 · 代码视图 (行号/分块), 按 txt 入库 (src/services/plainText.ts)
@@ -148,7 +150,9 @@ sync-server/           轻阅账号后端 (Cloudflare Worker + D1 + R2, sync.jia
 
 ## 发版流程
 
-**本地构建优先（2026-10-16 用户要求）**：后续可在本地完成构建、校验后再上传 GitHub Release，以减少 Actions 用量。平台、版本、Android 固定签名、校验清单和公开门禁保持不变；Linux 本机产物不能代替 macOS / Windows 的对应构建。本地发版先设 GitHub 仓库变量 `RELEASE_BUILD_MODE=manual`，此时推送 `v*` tag 的自动构建会跳过；显式 `workflow_dispatch` 不受影响。Android 本地构建后上传到草稿，附原有 APK 校验报告和 `.apk.build.json`（`tag`、`commit`、`sha256`），再手动运行 Release（`tag=vX.Y.Z`、`full_release=true`、`reuse_android=true`）；CI 复核本地 APK 并构建桌面平台，全部门禁通过才公开。未设置该变量时保留原来的 tag 自动构建；`reuse_android=false` 保留 CI Android 构建。v1.18.1 已由 CI 完整成功发布，无需重建或覆盖。
+**T9 构建优先（2026-10-23 用户要求）**：LightRead 的编译统一放在 `ssh t9` 构建机执行，包括前端构建与 Rust 编译/原生测试；当前开发机负责编辑与轻量验证。在 T9 完成构建、校验后再按授权上传 GitHub Release，以减少 Actions 用量。平台、版本、Android 固定签名、校验清单和公开门禁保持不变；Linux 本机产物不能代替 macOS / Windows 的对应构建。本地发版先设 GitHub 仓库变量 `RELEASE_BUILD_MODE=manual`，此时推送 `v*` tag 的自动构建会跳过；显式 `workflow_dispatch` 不受影响。Android 本地构建后上传到草稿，附原有 APK 校验报告和 `.apk.build.json`（`tag`、`commit`、`sha256`），再手动运行 Release（`tag=vX.Y.Z`、`full_release=true`、`reuse_android=true`）；CI 复核本地 APK 并构建桌面平台，全部门禁通过才公开。未设置该变量时保留原来的 tag 自动构建；`reuse_android=false` 保留 CI Android 构建。v1.18.1 已由 CI 完整成功发布，无需重建或覆盖。
+
+T9 非交互 SSH 需显式加入 `~/.cargo/bin` 到 PATH；LightRead 的 Rust 缓存使用 `~/tokenssh-build/cache/lightread-cargo-target`，源码在 `~/tokenssh-build/runs/` 下建独立目录。重任务在 T9 使用 `flock /tmp/heavy.lock nice -n 10 ...` 串行执行。不要同步本机 `node_modules`、`target`、密钥或无关草稿；桌面前端构建设置 `TAURI_ENV_PLATFORM=linux`。T9 已配置 GTK 3、WebKitGTK 4.1 与 Xvfb（2026-10-23）；无显示器的桌面启动与拖放验证可用 `xvfb-run`。
 
 1. 发版前检查工作区、需求清单与变更范围；同步修改 `package.json`、`package-lock.json`（顶层和根包两处）、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`（lightread 包）、`src-tauri/tauri.conf.json`。执行 `node scripts/check-release.mjs --self-test` 和 `node scripts/check-release.mjs --tag vX.Y.Z`，版本或 tag 不一致即停止。
 2. 完成相关单测、`npm run build`、阅读器/更新流程冒烟；Rust 变更执行相应原生测试。桌面分别确认 macOS arm64/x64、Windows NSIS、Linux AppImage/deb 的目标平台。CI 的 Rust 最低版本检查也必须通过。资源密集任务使用 `flock /tmp/heavy.lock nice -n 10 ...` 串行执行。

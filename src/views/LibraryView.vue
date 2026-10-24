@@ -6,9 +6,10 @@ import { shortAuthor, shortTitle } from '../services/displayTitle'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useLibrary } from '../stores/library'
-import { importFiles, type LazyImportFile } from '../services/importer'
+import { importFiles, type NativeImportFile, type LazyImportFile } from '../services/importer'
 import { IMPORT_FORMATS, planFolderPick, type FolderPlan } from '../services/folderPick'
-import { canPickFolder, loadFolderFile, scanFromFileList, scanNativeFolder, useNativeFolderPicker, type FolderFile, type FolderScan } from '../services/folderSource'
+import { canPickFolder, loadFolderFile, scanNativePaths, scanFromFileList, scanNativeFolder, useNativeFolderPicker, type FolderFile, type FolderScan } from '../services/folderSource'
+import { nativeDragging, nativeDropQueue } from '../services/nativeDrop'
 import { importFromUrl } from '../services/urlImport'
 import { sendBookToDevices } from '../services/transfer'
 import { canConvertToEpub } from '../services/format'
@@ -255,7 +256,7 @@ const filtered = computed(() => {
   ]
 })
 
-async function handleFiles(files: FileList | Array<File | LazyImportFile>) {
+async function handleFiles(files: FileList | Array<File | LazyImportFile | NativeImportFile>) {
   if (!files.length || importing.value) return
   const kind = pageKind.value
   const booklistId = kind === 'book' ? activeBooklistId.value : ''
@@ -276,6 +277,19 @@ async function handleFiles(files: FileList | Array<File | LazyImportFile>) {
   }
 }
 
+async function chooseFiles() {
+  importMenu.value = false
+  if (importing.value || scanningDrop.value || folderPick.value) return
+  if (!useNativeFolderPicker() || !folderSupported) { fileInput.value?.click(); return }
+  try {
+    const { open } = await import('@tauri-apps/plugin-dialog')
+    const paths = await open({ multiple: true, directory: false })
+    if (paths) nativeDropQueue.value = [...nativeDropQueue.value, Array.isArray(paths) ? paths : [paths]]
+  } catch (error) {
+    toast(t('library.dropFailed', { msg: String(error) }), 'error', 6000)
+  }
+}
+
 function onPick(e: Event) {
   const input = e.target as HTMLInputElement
   if (input.files) handleFiles(input.files)
@@ -291,7 +305,7 @@ const folderPick = ref<{ scanning: boolean; scan?: FolderScan; plan?: FolderPlan
 
 async function chooseFolder() {
   importMenu.value = false
-  if (importing.value) return
+  if (importing.value || scanningDrop.value || folderPick.value) return
   if (!useNativeFolderPicker()) { folderInput.value?.click(); return }
   try {
     const scan = await scanNativeFolder(name => { folderPick.value = { scanning: true, scan: { name, entries: [], truncated: false } } })
@@ -310,6 +324,7 @@ function onFolderPick(e: Event) {
 }
 
 function showFolderPlan(scan: FolderScan) {
+  reportScanErrors(scan)
   const kind = pageKind.value
   // 藏书里已有同名文件的不再导入 (导入流程本身不做内容去重)
   const existing = library.books.filter(b => (b.kind ?? 'book') === kind).map(b => b.fileName)
@@ -319,11 +334,47 @@ function showFolderPlan(scan: FolderScan) {
 function confirmFolderImport() {
   const selected = folderPick.value?.plan?.selected ?? []
   folderPick.value = null
-  if (selected.length) void handleFiles(selected.map(e => e.file ?? { name: e.name, load: () => loadFolderFile(e) }))
+  if (selected.length) void handleFiles(selected.map(importEntry))
+}
+
+function importEntry(entry: FolderFile): File | LazyImportFile | NativeImportFile {
+  return entry.file ?? (entry.absPath ? { name: entry.name, absPath: entry.absPath } : { name: entry.name, load: () => loadFolderFile(entry) })
+}
+
+function reportScanErrors(scan: FolderScan) {
+  if (scan.errors?.length) toast(t('folder.scanFailed', { msg: scan.errors.join('\n') }), 'error', 6000)
+}
+
+const scanningDrop = ref(false)
+// A second drop waits for the current import/confirmation instead of silently disappearing.
+watch([nativeDropQueue, importing, folderPick, scanningDrop], async () => {
+  if (importing.value || folderPick.value || scanningDrop.value || !nativeDropQueue.value.length) return
+  const [paths, ...rest] = nativeDropQueue.value
+  scanningDrop.value = true
+  nativeDropQueue.value = rest
+  try {
+    const scan = await scanNativePaths(paths!)
+    if (scan.hasDirectories || scan.truncated) showFolderPlan(scan)
+    else {
+      reportScanErrors(scan)
+      await handleFiles(scan.entries.map(importEntry))
+    }
+  } catch (error) {
+    toast(t('folder.scanFailed', { msg: String(error) }), 'error', 6000)
+  } finally {
+    scanningDrop.value = false
+  }
+}, { immediate: true })
+
+function onDragOver() {
+  // Native drops do not reliably deliver a DOM drop/leave to clear this flag.
+  // Desktop hover feedback is owned exclusively by the Tauri event listener.
+  if (!useNativeFolderPicker() || !folderSupported) dragging.value = true
 }
 
 function onDrop(e: DragEvent) {
   dragging.value = false
+  if (useNativeFolderPicker() && folderSupported) return
   if (e.dataTransfer?.files) handleFiles(e.dataTransfer.files)
 }
 
@@ -772,8 +823,8 @@ async function batchClearTags() {
 <template>
   <div
     class="library"
-    :class="{ dragging }"
-    @dragover.prevent="dragging = true"
+    :class="{ dragging: dragging || nativeDragging }"
+    @dragover.prevent="onDragOver"
     @dragleave.self="dragging = false"
     @drop.prevent="onDrop"
     @click="importMenu = false"
@@ -850,7 +901,7 @@ async function batchClearTags() {
           class="btn btn-primary import-main"
           :disabled="importing"
           :aria-label="t(paperMode ? 'library.importPapers' : 'library.import')"
-          @click="fileInput?.click()"
+          @click="chooseFiles()"
         >
           <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M11 13H5a1 1 0 1 1 0-2h6V5a1 1 0 1 1 2 0v6h6a1 1 0 1 1 0 2h-6v6a1 1 0 1 1-2 0v-6z"/></svg>
           <span class="hide-narrow">{{ t(paperMode ? 'library.importPapers' : 'library.import') }}</span>
@@ -867,7 +918,7 @@ async function batchClearTags() {
           <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M5.3 9.3a1 1 0 0 1 1.4 0l5.3 5.29 5.3-5.3a1 1 0 1 1 1.4 1.42l-6 6a1 1 0 0 1-1.4 0l-6-6a1 1 0 0 1 0-1.42z"/></svg>
         </button>
         <div v-if="importMenu" class="import-menu card" role="menu">
-          <button role="menuitem" @click="importMenu = false; fileInput?.click()">
+          <button role="menuitem" @click="importMenu = false; chooseFiles()">
             <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M4 6a3 3 0 0 1 3-3h3.6a3 3 0 0 1 2.1.9L14.4 5.6a1 1 0 0 0 .7.3H17a3 3 0 0 1 3 3v9a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3V6zm3-1a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V8.9a1 1 0 0 0-1-1h-1.9a3 3 0 0 1-2.1-.9L11.3 5.3a1 1 0 0 0-.7-.3H7z"/></svg>
             {{ t('library.importLocal') }}
           </button>
@@ -1013,6 +1064,7 @@ async function batchClearTags() {
       </div>
     </div>
 
+    <p v-if="scanningDrop && !importing" role="status">{{ t('folder.scanning') }}</p>
     <div v-if="importing" class="import-bar card" role="status" aria-live="polite">
       <div class="import-text">
         {{ t('library.importing', { name: importState.current, done: Math.min(importState.done + 1, importState.total), total: importState.total }) }}
@@ -1065,7 +1117,7 @@ async function batchClearTags() {
         <template v-else>{{ t(touchPrimary ? 'library.emptyHintTouch' : 'library.emptyHint') }}<br />{{ t('library.supportedFormats') }}</template>
       </p>
       <div class="empty-actions">
-        <button class="btn btn-primary" @click="fileInput?.click()">
+        <button class="btn btn-primary" @click="chooseFiles()">
           <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M11 13H5a1 1 0 1 1 0-2h6V5a1 1 0 1 1 2 0v6h6a1 1 0 1 1 0 2h-6v6a1 1 0 1 1-2 0v-6z"/></svg>
           {{ t(paperMode ? 'library.importPapers' : 'library.import') }}
         </button>
@@ -1245,7 +1297,7 @@ async function batchClearTags() {
     <!-- 手机: 添加面板 -->
     <AppModal v-if="addSheet" :title="t(paperMode ? 'library.importPapers' : 'library.import')" @close="addSheet = false">
       <div class="sheet-list">
-        <button class="sheet-row" @click="addAction(() => fileInput?.click())">
+        <button class="sheet-row" @click="addAction(chooseFiles)">
           <span class="sheet-ico brand"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5"/></svg></span>
           <span class="sheet-text"><span class="sheet-label">{{ t('library.importLocal') }}</span><span class="sheet-desc">{{ t('library.addLocalDesc') }}</span></span>
         </button>
@@ -1562,7 +1614,7 @@ async function batchClearTags() {
       </div>
     </div>
 
-    <div v-if="dragging" class="drop-hint" aria-hidden="true">
+    <div v-if="dragging || nativeDragging" class="drop-hint" aria-hidden="true">
       <div class="drop-hint-inner">
         <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V4m0 0-4 4m4-4 4 4M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
         <span>{{ t(paperMode ? 'library.dropHintPapers' : 'library.dropHint') }}</span>

@@ -286,10 +286,23 @@ export class TauriStorage implements LibraryStorage {
     return { kind: 'local-file', root: this.root, rel, blob: () => this.readRel(rel) }
   }
 
+  async stageBookFromPath(path: string): Promise<LocalFileRef> {
+    const staged = await this.stageBookFile(`import-${newId()}`)
+    await this.libraryFile('library_import_copy', { path, rel: staged.rel })
+    return staged
+  }
+
   async addBookFromStaged(meta: NewBookMeta, staged: LocalFileRef, cover?: Blob) {
     const id = newId()
-    await this.libraryFile('library_file_rename', { from: staged.rel, to: this.bookPath(id, meta.fileName) })
-    await this.insertBook(id, meta, cover)
+    const rel = this.bookPath(id, meta.fileName)
+    await this.libraryFile('library_file_rename', { from: staged.rel, to: rel })
+    try {
+      await this.insertBook(id, meta, cover)
+    } catch (error) {
+      await this.libraryFile('library_file_remove', { rel }).catch(() => {})
+      await this.libraryFile('library_file_remove', { rel: this.coverPath(id) }).catch(() => {})
+      throw error
+    }
     return id
   }
 

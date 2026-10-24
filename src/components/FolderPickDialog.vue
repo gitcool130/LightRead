@@ -58,6 +58,7 @@ onBeforeUnmount(() => previousFocus?.focus?.())
         <template v-else>
           <p class="folder-summary" role="status" aria-live="polite">{{ summary }}</p>
           <p v-if="scan?.truncated" class="folder-warn">{{ t('folder.truncated', { n: FOLDER_MAX_FILES }) }}</p>
+          <p v-if="scan?.depthLimited" class="folder-warn">{{ t('folder.depthLimited') }}</p>
           <p v-if="!count" class="folder-muted">{{ t('folder.empty') }}</p>
           <p v-if="droppedCount" class="folder-muted">{{ t('folder.rule') }}</p>
           <details v-if="count" class="folder-list folder-selected">

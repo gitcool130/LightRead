@@ -16,6 +16,7 @@ mod http_upload;
 #[cfg(all(test, not(windows)))]
 mod ipc_contract_tests;
 mod library_files;
+mod library_import;
 mod local_tts;
 mod tts_device;
 mod txt_epub;
@@ -174,6 +175,8 @@ pub fn run() {
       folder_scan::folder_scan,
       http_upload::http_upload,
       http_upload::http_upload_file,
+      library_import::library_import_scan,
+      library_import::library_import_copy,
       library_files::library_file_sha256,
       library_files::library_file_download,
       library_files::library_file_rename,

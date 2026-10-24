@@ -1,10 +1,10 @@
 /**
- * 「选择文件夹」的平台适配: 桌面 (Tauri) 走系统目录对话框 + plugin-fs 递归读取,
+ * 「选择文件夹」的平台适配: 桌面 (Tauri) 走系统目录对话框 + Rust 递归扫描,
  * 网页走 <input type="file" webkitdirectory>。挑书规则见 folderPick.ts。
  * Android / iOS 的 WebView 与 Tauri 移动端拿不到可遍历的目录, 不提供入口。
  */
 import { isTauri } from '../storage/types.ts'
-import { IGNORED_DIRS, type FolderEntry } from './folderPick.ts'
+import type { FolderEntry } from './folderPick.ts'
 
 /** 一次最多扫描的文件数 / 目录深度 */
 export const FOLDER_MAX_FILES = 5000
@@ -23,6 +23,9 @@ export interface FolderScan {
   entries: FolderFile[]
   /** 文件太多, 只扫描了前 FOLDER_MAX_FILES 个 */
   truncated: boolean
+  depthLimited?: boolean
+  hasDirectories?: boolean
+  errors?: string[]
 }
 
 const isMobile = () => typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
@@ -55,19 +58,17 @@ export function scanFromFileList(files: FileList | File[]): FolderScan | null {
 /** 桌面: 弹出目录对话框并递归扫描; 取消返回 null。onPicked: 选好目录、开始扫描时回调 (界面显示「正在扫描」) */
 export async function scanNativeFolder(onPicked?: (name: string) => void): Promise<FolderScan | null> {
   const { open } = await import('@tauri-apps/plugin-dialog')
-  // recursive: 让对话框把子目录也加入 fs 权限范围
   const picked = await open({ directory: true, recursive: true, multiple: false })
   const root = Array.isArray(picked) ? picked[0] : picked
   if (!root) return null
-  const trimmed = root.replace(/[\\/]+$/, '') || root
-  const name = trimmed.split(/[\\/]/).pop() || trimmed
-  onPicked?.(name)
-  // 原生一次递归扫描并带回大小 / 修改时间 (src-tauri/src/folder_scan.rs); 以前每个目录一次 readDir、每本书一次 stat
+  onPicked?.(root.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || root)
+  return scanNativePaths([root])
+}
+
+/** Rust 在后台一次扫描, 支持文件、文件夹混合及重叠路径。 */
+export async function scanNativePaths(paths: string[]): Promise<FolderScan> {
   const { invoke } = await import('@tauri-apps/api/core')
-  const scan = await invoke<{ entries: FolderFile[]; truncated: boolean }>('folder_scan', {
-    root: trimmed, maxFiles: FOLDER_MAX_FILES, maxDepth: FOLDER_MAX_DEPTH, skipDirs: [...IGNORED_DIRS],
-  })
-  return { name, entries: scan.entries, truncated: scan.truncated }
+  return invoke<FolderScan>('library_import_scan', { paths })
 }
 
 /** 取得条目的 File (桌面端此时才从磁盘读出) */

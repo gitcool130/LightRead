@@ -12,6 +12,7 @@ import { watchReadingViewport } from './services/readingViewport'
 import { useAppearance } from './services/appearance'
 import { t } from './i18n'
 import { isTauri } from './storage'
+import { startNativeDrop } from './services/nativeDrop'
 import { startExternalOpen } from './services/externalOpen'
 import { toast } from './services/toast'
 import { requestAutoSync, startAutoSync } from './services/sync'
@@ -34,6 +35,7 @@ settings.persistOnChange()
 useAppearance()
 const route = useRoute()
 const router = useRouter()
+let stopNativeDrop: (() => void) | undefined
 let stopExternalOpen: (() => void) | undefined
 let stopSync: (() => void) | undefined
 let stopTransfer: (() => void) | undefined
@@ -110,7 +112,10 @@ onMounted(async () => {
   })
   // 安卓: 去开「安装未知应用」回来后接着安装
   stopPendingInstall = watchPendingInstall()
-  if (isTauri()) stopExternalOpen = await startExternalOpen(router)
+  if (isTauri()) {
+    stopNativeDrop = startNativeDrop(router, error => toast(t('library.dropFailed', { msg: String(error) }), 'error', 6000))
+    stopExternalOpen = await startExternalOpen(router)
+  }
   // 多端同步: 启动一次、切到后台、每 5 分钟 (未开启自动同步时引擎自己跳过)
   stopSync = startAutoSync()
   // 互传: 启动、获得焦点、可见期间定时收取 (未登录且未配置 WebDAV 时什么也不做); 设置里关闭互传时不收取
@@ -132,6 +137,7 @@ async function recoverFromLocalTtsCrash() {
   toast(t('tts.localCrashedRecovered'), 'error', 12000)
 }
 onBeforeUnmount(() => {
+  stopNativeDrop?.()
   stopExternalOpen?.()
   stopSync?.()
   stopTransferWatch?.()
