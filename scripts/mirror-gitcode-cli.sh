@@ -43,7 +43,7 @@ for k,v in json.load(sys.stdin)["headers"].items(): print(f"-H\n{k}: {v}")')
 
 "$GC" auth status >/dev/null 2>&1 || { echo "GitCode CLI 未登录: 先运行 gitcode auth login" >&2; exit 1; }
 
-# App 的源码在 Dev，不能由 release create 在 main 上隐式生成同名 tag。
+# 版本 tag 必须先以原提交推到 GitCode；不能由 release create 在 GitCode 默认分支上隐式生成同名 tag。
 # 只使用已经同步且与 GitHub 相同的 tag；不移动已有 tag。
 TARGET_REF=main
 if [[ $TAG =~ ^(app-)?v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
