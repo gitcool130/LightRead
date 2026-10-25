@@ -83,6 +83,14 @@ await page.addInitScript(() => {
 })
 
 let failedSteps = 0
+// PDF 桌面顶栏: 阅读方式 / 页面视图 / 适配 / 全屏 / 放映收在「视图」面板里, 点完即关
+const pdfView = async (name) => {
+  if (!await page.locator('.view-panel').count()) await page.locator('.view-trigger').click()
+  await page.locator('.view-panel').getByRole('button', { name, exact: true }).click()
+  if (await page.locator('.view-panel').count()) await page.keyboard.press('Escape')
+  await page.locator('.view-panel').waitFor({ state: 'detached' })
+}
+
 const step = async (name, fn) => {
   try {
     await fn()
@@ -346,9 +354,9 @@ await step('返回书架并打开 PDF', async () => {
 await page.screenshot({ path: join(TMP, 'shots', '06-pdf.png') })
 
 await step('PDF 手动连续滚动与适宽', async () => {
-  await page.getByRole('button', { name: '滚动', exact: true }).click()
-  await page.getByRole('button', { name: '单页', exact: true }).click()
-  await page.getByRole('button', { name: '适宽', exact: true }).click()
+  await pdfView('滚动')
+  await pdfView('单页')
+  await pdfView('适宽')
   await page.waitForFunction(() => {
     const box = document.querySelector('.pane-left')
     const canvas = document.querySelector('.pane-left canvas')
@@ -365,7 +373,7 @@ await step('PDF 手动连续滚动与适宽', async () => {
     const clientTop = (boxRect?.top ?? 0) + (box?.clientTop ?? 0)
     const style = box ? getComputedStyle(box) : null
     return {
-      hasScrollMode: !!document.querySelector('.reader-segment button.active')?.textContent?.includes('滚动'),
+      hasScrollMode: !!document.querySelector('.pane-left canvas'),
       boxW: box?.clientWidth ?? 0,
       canvasW: parseFloat(canvas?.style.width ?? '0'),
       leftGap: (canvasRect?.left ?? 0) - clientLeft,
@@ -420,8 +428,8 @@ await step('PDF 画布按设备像素显示且文字无彩色雾边', async () =
 })
 
 await step('PDF 可切换翻页并一键适高', async () => {
-  await page.getByRole('button', { name: '翻页', exact: true }).click()
-  await page.getByRole('button', { name: '适高', exact: true }).click()
+  await pdfView('翻页')
+  await pdfView('适高')
   await page.waitForSelector('.paged-box .p-holder canvas', { timeout: 8000 })
   await page.waitForFunction(() => {
     const box = document.querySelector('.paged-box')
@@ -718,7 +726,7 @@ await step('PDF 快捷键面板展示完整操作并适配短视口', async () =
 
 await step('PDF 全屏支持目录侧栏与跳转', async () => {
   const pageBefore = await page.locator('.page-input').inputValue()
-  await page.getByRole('button', { name: '全屏阅读 (F)', exact: true }).click()
+  await pdfView('全屏阅读 (F)')
   await page.waitForFunction(() => !!document.fullscreenElement)
   const headerDisplay = await page.locator('.paper-header').evaluate(el => getComputedStyle(el).display)
   if (headerDisplay !== 'none') throw new Error(`全屏仍显示工具栏: ${headerDisplay}`)
@@ -738,7 +746,7 @@ await step('PDF 全屏支持目录侧栏与跳转', async () => {
 })
 
 await step('PDF 幻灯片支持逐页与退出', async () => {
-  await page.getByRole('button', { name: '幻灯片放映 (F5)', exact: true }).click()
+  await pdfView('幻灯片放映 (F5)')
   await page.waitForSelector('.paper.is-presentation .presentation-controls')
   const before = await page.locator('.page-input').inputValue()
   await page.locator('.presentation-controls button').last().click()
@@ -748,17 +756,17 @@ await step('PDF 幻灯片支持逐页与退出', async () => {
 })
 
 await step('PDF 书籍视图支持连续滚动双页', async () => {
-  await page.getByRole('button', { name: '滚动', exact: true }).click()
-  await page.getByRole('button', { name: '书籍视图', exact: true }).click()
+  await pdfView('滚动')
+  await pdfView('书籍视图')
   await page.waitForFunction(() =>
     [...document.querySelectorAll('.scroll-spread-host')]
       .some(group => group.querySelectorAll('.p-holder').length === 2),
   null, { timeout: 8000 })
-  await page.getByRole('button', { name: '单页', exact: true }).click()
+  await pdfView('单页')
 })
 
 await step('PDF 自动阅读按模式滚动或翻页', async () => {
-  await page.click('.paper-actions .reader-segment button:has-text("滚动")')
+  await pdfView('滚动')
   await page.waitForSelector('.pane-left .p-holder canvas', { timeout: 8000 })
   await page.click('.paper-actions .reader-tool:has-text("自动翻页")')
   // Slowest setting is < 1px/frame: native scroll quantization must not stall it.
@@ -780,7 +788,7 @@ await step('PDF 自动阅读按模式滚动或翻页', async () => {
   if (after <= before + 1) throw new Error(`滚动模式没有连续下移: ${before} -> ${after}`)
   await page.click('.auto-panel button[title="停止"]')
 
-  await page.click('.paper-actions .reader-segment button:has-text("翻页")')
+  await pdfView('翻页')
   await page.waitForSelector('.paged-box .p-holder canvas', { timeout: 8000 })
   const pageBefore = await page.locator('.page-input').inputValue()
   await page.click('.paper-actions .reader-tool:has-text("自动翻页")')
@@ -791,7 +799,7 @@ await step('PDF 自动阅读按模式滚动或翻页', async () => {
 })
 
 await step('PDF 双页与翻页', async () => {
-  await page.getByRole('button', { name: '对页', exact: true }).click()
+  await pdfView('对页')
   await page.waitForFunction(() => document.querySelectorAll('.spread-host canvas').length === 2, null, { timeout: 8000 })
   await page.screenshot({ path: join(TMP, 'shots', '06b-pdf-two-page.png') })
   await page.locator('.paper-actions').screenshot({ path: join(TMP, 'shots', '06c-pdf-toolbar.png') })
@@ -841,9 +849,9 @@ await step('双语横版 PDF 适宽后四周和页间均无接缝', async () => 
   await page.waitForSelector('.book-card:has-text("bilingual-wide")', { timeout: 15000 })
   await page.click('.book-card:has-text("bilingual-wide")')
   await page.waitForSelector('.p-holder canvas', { timeout: 15000 })
-  await page.getByRole('button', { name: '滚动', exact: true }).click()
-  await page.getByRole('button', { name: '单页', exact: true }).click()
-  await page.getByRole('button', { name: '适宽', exact: true }).click()
+  await pdfView('滚动')
+  await pdfView('单页')
+  await pdfView('适宽')
   await page.waitForFunction(() => {
     const box = document.querySelector('.pane-left')
     const canvas = document.querySelector('.pane-left canvas')

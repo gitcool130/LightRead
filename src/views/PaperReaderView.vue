@@ -707,13 +707,153 @@ function zoomStep(dir: 1 | -1) {
 
 /** SumatraPDF 的离散缩放阶梯；当前整页 Canvas 的安全上限为 400%。 */
 const SUMATRA_ZOOM_LEVELS = [0.0833, 0.125, 0.18, 0.25, 0.3333, 0.5, 0.6667, 0.75, 1, 1.25, 1.5, 2, 3, 4]
-const ZOOM_PRESETS = [0.125, 0.25, 0.5, 0.6667, 0.75, 1, 1.25, 1.5, 2, 3, 4]
 const zoomMenu = ref(false)
+/** 缩放菜单 3 列网格, 12 档凑满 4 行 */
+const ZOOM_MENU_PRESETS = [0.125, 0.25, 0.3333, 0.5, 0.6667, 0.75, 1, 1.25, 1.5, 2, 3, 4]
+const zoomTrigger = ref<HTMLElement>()
+const zoomMenuEl = ref<HTMLElement>()
+const typographyTrigger = ref<HTMLElement>()
+const viewPanelOpen = ref(false)
+const viewTrigger = ref<HTMLElement>()
+const viewPanelEl = ref<HTMLElement>()
+
+/* ---- 桌面单行顶栏: 弹层锚在触发按钮正下方 ----
+   只在打开 / 窗口尺寸变化时读一次按钮位置, fixed 定位并夹在视口内 */
+const popoverAnchor = ref({ top: 0, left: 0 })
+const ZOOM_MENU_WIDTH = 252
+const VIEW_PANEL_WIDTH = 320
+const TYPOGRAPHY_POPOVER_WIDTH = 340
+
+function anchorPopover(trigger: HTMLElement | undefined, width: number) {
+  if (!trigger) return
+  const rect = trigger.getBoundingClientRect()
+  const w = Math.min(width, window.innerWidth - 16)
+  const center = rect.left + rect.width / 2
+  popoverAnchor.value = {
+    top: Math.round(rect.bottom + 8),
+    left: Math.round(Math.min(Math.max(center - w / 2, 8), window.innerWidth - w - 8)),
+  }
+}
+
+function reanchorPopovers() {
+  if (zoomMenu.value) anchorPopover(zoomTrigger.value, ZOOM_MENU_WIDTH)
+  else if (viewPanelOpen.value) anchorPopover(viewTrigger.value, VIEW_PANEL_WIDTH)
+  else if (typographyOpen.value) anchorPopover(typographyTrigger.value, TYPOGRAPHY_POPOVER_WIDTH)
+}
+
+function closeToolbarPopovers() {
+  zoomMenu.value = false
+  viewPanelOpen.value = false
+  typographyOpen.value = false
+  moreMenu.value = false
+}
+
+async function toggleZoomMenu() {
+  const opening = !zoomMenu.value
+  closeToolbarPopovers()
+  shortcutsOpen.value = false
+  if (!opening) return
+  anchorPopover(zoomTrigger.value, ZOOM_MENU_WIDTH)
+  zoomMenu.value = true
+  await nextTick()
+  const items = zoomMenuItems()
+  ;(items.find(item => item.getAttribute('aria-checked') === 'true') ?? items[0])?.focus()
+}
+
+async function toggleViewPanel() {
+  const opening = !viewPanelOpen.value
+  closeToolbarPopovers()
+  shortcutsOpen.value = false
+  if (!opening) return
+  anchorPopover(viewTrigger.value, VIEW_PANEL_WIDTH)
+  viewPanelOpen.value = true
+  await nextTick()
+  viewPanelEl.value?.querySelector<HTMLElement>('[aria-pressed="true"]')?.focus()
+}
+
+function toggleTypographyPopover() {
+  const opening = !typographyOpen.value
+  closeToolbarPopovers()
+  shortcutsOpen.value = false
+  if (opening) anchorPopover(typographyTrigger.value, TYPOGRAPHY_POPOVER_WIDTH)
+  typographyOpen.value = opening
+}
+
+function toggleMoreMenu() {
+  const opening = !moreMenu.value
+  closeToolbarPopovers()
+  moreMenu.value = opening
+}
+
+/** 视图面板里的全屏 / 放映 / 菜单项: 先收起弹层再执行 */
+function runFromToolbarPopover(action: () => unknown) {
+  closeToolbarPopovers()
+  void action()
+}
+
+function zoomMenuItems() {
+  return Array.from(zoomMenuEl.value?.querySelectorAll<HTMLElement>('[role="menuitemradio"]') ?? [])
+}
+
+function onZoomMenuKeydown(event: KeyboardEvent) {
+  // 菜单内的方向键 / Esc 不交给阅读器全局快捷键 (否则会翻页)
+  event.stopPropagation()
+  if (event.key === 'Escape' || event.key === 'Tab') {
+    event.preventDefault()
+    zoomMenu.value = false
+    zoomTrigger.value?.focus()
+    return
+  }
+  const items = zoomMenuItems()
+  const index = items.indexOf(document.activeElement as HTMLElement)
+  const inGrid = index >= 0 && index < ZOOM_MENU_PRESETS.length
+  const delta: Record<string, number> = {
+    ArrowRight: 1,
+    ArrowLeft: -1,
+    ArrowDown: inGrid && index + 3 < ZOOM_MENU_PRESETS.length ? 3 : 1,
+    ArrowUp: inGrid ? -3 : index === ZOOM_MENU_PRESETS.length ? -2 : -1,
+  }
+  let next = -1
+  if (event.key in delta) next = Math.min(items.length - 1, Math.max(0, index + delta[event.key]))
+  else if (event.key === 'Home') next = 0
+  else if (event.key === 'End') next = items.length - 1
+  if (next < 0) return
+  event.preventDefault()
+  items[next]?.focus()
+}
+
+function onViewPanelKeydown(event: KeyboardEvent) {
+  event.stopPropagation()
+  if (event.key !== 'Escape') return
+  event.preventDefault()
+  viewPanelOpen.value = false
+  viewTrigger.value?.focus()
+}
 
 function pickZoom(z: PdfZoom) {
   zoomMenu.value = false
+  zoomTrigger.value?.focus()
   void applyZoom(z)
 }
+
+/* 顶栏宽度分档: 宽度不够时右侧按钮只留图标, 再窄把听书 / 自动翻页收进「更多」 */
+const topbar = ref<HTMLElement>()
+const topbarWidth = ref(Number.POSITIVE_INFINITY)
+const topbarCompact = computed(() => topbarWidth.value < 1220)
+const topbarNarrow = computed(() => topbarWidth.value < 980)
+let topbarObserver: ResizeObserver | undefined
+watch(topbar, el => {
+  topbarObserver?.disconnect()
+  topbarObserver = undefined
+  if (!el || typeof ResizeObserver === 'undefined') return
+  topbarObserver = new ResizeObserver(([entry]) => { topbarWidth.value = entry.contentRect.width })
+  topbarObserver.observe(el)
+})
+onMounted(() => window.addEventListener('resize', reanchorPopovers))
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', reanchorPopovers)
+  topbarObserver?.disconnect()
+})
 
 function zoomPercentLabel(value: number) {
   const percent = value * 100
@@ -747,8 +887,7 @@ function resetReaderZoom() {
 
 async function toggleShortcutGuide() {
   shortcutsOpen.value = !shortcutsOpen.value
-  zoomMenu.value = false
-  typographyOpen.value = false
+  closeToolbarPopovers()
   if (shortcutsOpen.value) {
     await nextTick()
     shortcutMenu.value?.focus()
@@ -1208,7 +1347,16 @@ function closeDrawer() {
   annoOpen.value = false
 }
 
+const lastDrawerTab = ref<DrawerTab>('toc')
+
+/** 顶栏侧栏开关: 目录 / 缩略图 / 划线想法共用一个入口, 打开时回到上次的标签 */
+function toggleSidebar() {
+  if (drawerOpen.value) closeDrawer()
+  else setDrawerTab(lastDrawerTab.value)
+}
+
 function setDrawerTab(tab: DrawerTab) {
+  lastDrawerTab.value = tab
   tocOpen.value = tab === 'toc'
   thumbnailOpen.value = tab === 'thumbnails'
   annoOpen.value = tab === 'annotations'
@@ -2599,9 +2747,8 @@ async function switchPdfLayout(next: 'original' | 'reflow') {
   stopAutoRead()
   selection.value = null
   closeSelTr()
-  zoomMenu.value = false
+  closeToolbarPopovers()
   shortcutsOpen.value = false
-  typographyOpen.value = false
   backStack.value = []
   forwardStack.value = []
   settings.pdf.layout = next
@@ -3444,8 +3591,7 @@ function runPdfShortcutCommand(command: PdfReaderShortcutCommandId) {
         activeAnnotation.value = null
         closeSelTr()
         closeDrawer()
-        zoomMenu.value = false
-        typographyOpen.value = false
+        closeToolbarPopovers()
         shortcutsOpen.value = false
         stopAutoRead()
         autoPanel.value = false
@@ -3856,7 +4002,7 @@ onBeforeUnmount(() => clearTimeout(phoneBarsTimer))
       @change="onPdfOpenPicked"
     />
     <header class="paper-header" :class="{ 'phone-hidden': isPhone && !phoneBars }">
-      <div class="paper-bar">
+      <div v-if="isPhone" class="paper-bar">
         <div class="paper-document">
           <button class="icon-btn document-back" :title="backLabel" @click="router.push(backTarget)">
             <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M14.7 5.3a1 1 0 0 1 0 1.4L9.42 12l5.3 5.3a1 1 0 0 1-1.42 1.4l-6-6a1 1 0 0 1 0-1.4l6-6a1 1 0 0 1 1.42 0z"/></svg>
@@ -3920,247 +4066,389 @@ onBeforeUnmount(() => clearTimeout(phoneBarsTimer))
             </div>
           </div>
         </div>
-
-        <div v-else class="paper-context-actions">
-          <template v-if="isPaper">
-            <button
-              class="btn btn-sm context-action"
-              :class="translateOpen ? 'btn-active' : 'btn-primary'"
-              :disabled="!pageCount"
-              @click="openRight('translate')"
-            >
-              {{ t('paper.openTranslate') }}
-            </button>
-            <button v-if="paperAgentRuntimeAvailable()" class="btn btn-sm context-action" :class="{ 'btn-active': rightTab === 'agent' }" :disabled="!pageCount" @click="openRight('agent')">
-              {{ t('paper.agentTitle') }}
-            </button>
-            <button v-if="bdSupported" class="btn btn-sm context-action" :title="t('paper.bdTooltip')" @click="openBabeldoc">
-              {{ t('paper.bdButton') }}
-            </button>
-          </template>
-          <button
-            v-else-if="paperAgentRuntimeAvailable()"
-            class="btn btn-sm context-action ai-entry"
-            :class="{ 'btn-active': rightTab === 'agent' }"
-            :disabled="!pageCount"
-            @click="openRight('agent')"
-          >
-            ✦ {{ t('paper.agentTitle') }}
-          </button>
-          <button class="btn btn-sm change-document" @click="router.push(backTarget)">
-            {{ t('reader.changeDocument') }}
-          </button>
-        </div>
       </div>
 
-      <div v-if="!isPhone" class="pdf-toolbar paper-actions">
-        <div class="toolbar-group">
+      <!-- 桌面单行顶栏 (2026-10-25 用户确认方案 A): 标题 · 翻页缩放居中 · 功能; 手机端维持上面的原样 -->
+      <div
+        v-else
+        ref="topbar"
+        class="pdf-topbar paper-actions"
+        :class="{ compact: topbarCompact }"
+        role="toolbar"
+        :aria-label="t('reader.toolbar')"
+      >
+        <div class="topbar-start">
+          <button type="button" class="top-icon document-back" :title="backLabel" :aria-label="backLabel" @click="router.push(backTarget)">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6" /></svg>
+          </button>
           <button
-            class="icon-btn"
-            :class="{ 'icon-active': tocOpen }"
+            type="button"
+            class="top-icon"
+            :class="{ on: drawerOpen }"
             :title="t('reader.toc')"
-            :aria-pressed="tocOpen"
-            @click="toggleDrawerTab('toc')"
+            :aria-label="t('reader.toc')"
+            :aria-pressed="drawerOpen"
+            @click="toggleSidebar"
           >
-            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M4 6a1 1 0 0 1 1-1h14a1 1 0 1 1 0 2H5a1 1 0 0 1-1-1zm0 6a1 1 0 0 1 1-1h14a1 1 0 1 1 0 2H5a1 1 0 0 1-1-1zm1 5a1 1 0 1 0 0 2h9a1 1 0 1 0 0-2H5z"/></svg>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5" /><path d="M9.5 4.5v15M6 8.5h1M6 11.5h1" /></svg>
           </button>
-          <button
-            class="icon-btn"
-            :class="{ 'icon-active': thumbnailOpen }"
-            :title="t('reader.thumbnails')"
-            :aria-pressed="thumbnailOpen"
-            @click="toggleDrawerTab('thumbnails')"
-          >
-            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
-              <path fill="currentColor" d="M4.75 3.5h5.5c.69 0 1.25.56 1.25 1.25v6.5c0 .69-.56 1.25-1.25 1.25h-5.5c-.69 0-1.25-.56-1.25-1.25v-6.5c0-.69.56-1.25 1.25-1.25zm0 10h5.5c.69 0 1.25.56 1.25 1.25v4.5c0 .69-.56 1.25-1.25 1.25h-5.5c-.69 0-1.25-.56-1.25-1.25v-4.5c0-.69.56-1.25 1.25-1.25zm9-10h5.5c.69 0 1.25.56 1.25 1.25v4.5c0 .69-.56 1.25-1.25 1.25h-5.5c-.69 0-1.25-.56-1.25-1.25v-4.5c0-.69.56-1.25 1.25-1.25zm0 8h5.5c.69 0 1.25.56 1.25 1.25v6.5c0 .69-.56 1.25-1.25 1.25h-5.5c-.69 0-1.25-.56-1.25-1.25v-6.5c0-.69.56-1.25 1.25-1.25z"/>
-            </svg>
-          </button>
-          <button
-            class="icon-btn"
-            :class="{ 'icon-active': annoOpen }"
-            :title="t('reader.highlightsTab')"
-            :aria-pressed="annoOpen"
-            @click="toggleDrawerTab('annotations')"
-          >
-            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M15.6 3.6a2 2 0 0 1 2.8 0l2 2a2 2 0 0 1 0 2.8l-9.2 9.2a2 2 0 0 1-.9.5l-4 1a1 1 0 0 1-1.2-1.2l1-4a2 2 0 0 1 .5-.9l9-9.4zM14 7.4 7 14.6l-.5 2 2-.5 7-7.2L14 7.4zm2.4-2.4-1 1L17 7.6l1-1-1.6-1.6z"/></svg>
-          </button>
+          <div class="paper-title topbar-title">
+            <strong :title="meta?.title">{{ meta?.title }}</strong>
+            <span>{{ t('reader.documentMeta', { total: pageCount, current: currentPage }) }}</span>
+          </div>
         </div>
-        <span class="toolbar-sep" />
 
-        <div class="toolbar-group toolbar-page">
-          <button class="icon-btn" :title="t('reader.prevPage')" :disabled="atFirstPage" @click="prevPage">
-            <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M14.7 5.3a1 1 0 0 1 0 1.4L9.42 12l5.3 5.3a1 1 0 0 1-1.42 1.4l-6-6a1 1 0 0 1 0-1.4l6-6a1 1 0 0 1 1.42 0z"/></svg>
-          </button>
-          <span class="paper-pagenum">
-            <input v-model="pageInput" class="input page-input" :aria-label="t('common.current')" @keyup.enter="jumpTo" @blur="jumpTo" />
-            <span>/ {{ pageCount }}</span>
-          </span>
-          <button class="icon-btn" :title="t('reader.nextPage')" :disabled="atLastPage" @click="nextPage">
-            <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M9.3 5.3a1 1 0 0 1 1.4 0l6 6a1 1 0 0 1 0 1.4l-6 6a1 1 0 0 1-1.4-1.4l5.29-5.3-5.3-5.3a1 1 0 0 1 0-1.4z"/></svg>
-          </button>
-        </div>
-        <span class="toolbar-sep" />
-
-        <div class="toolbar-group toolbar-zoom">
-          <template v-if="pdfLayout === 'original'">
-            <button class="icon-btn" :title="`${t('reader.zoomOut')} (${primaryShortcutLabel} −)`" @click="zoomStep(-1)">−</button>
-            <button class="dock-zoom" @click="zoomMenu = !zoomMenu">
-              {{ zoom === 'fit-page' ? t('reader.fitPage') : zoom === 'fit-width' ? t('reader.fitWidth') : zoomPercentLabel(zoom as number) }}
-              <span class="dock-caret">⌄</span>
+        <div class="topbar-center">
+          <div class="top-cluster" role="group" :aria-label="t('reader.pageNavigation')">
+            <button type="button" class="top-icon" :title="`${t('reader.prevPage')} (←)`" :aria-label="t('reader.prevPage')" :disabled="atFirstPage" @click="prevPage">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 17l-5-5 5-5" /></svg>
             </button>
-            <button class="icon-btn" :title="`${t('reader.zoomIn')} (${primaryShortcutLabel} +)`" @click="zoomStep(1)">＋</button>
+            <span class="paper-pagenum">
+              <input
+                v-model="pageInput"
+                class="page-input"
+                name="page"
+                inputmode="numeric"
+                autocomplete="off"
+                spellcheck="false"
+                :aria-label="t('common.current')"
+                @focus="($event.target as HTMLInputElement).select()"
+                @keyup.enter="jumpTo"
+                @blur="jumpTo"
+              />
+              <span>/ {{ pageCount }}</span>
+            </span>
+            <button type="button" class="top-icon" :title="`${t('reader.nextPage')} (→)`" :aria-label="t('reader.nextPage')" :disabled="atLastPage" @click="nextPage">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 7l5 5-5 5" /></svg>
+            </button>
+          </div>
+          <div v-if="pdfLayout === 'original'" class="top-cluster" role="group" :aria-label="t('reader.zoomLevel')">
+            <button
+              type="button"
+              class="top-icon"
+              :title="`${t('reader.zoomOut')} (${primaryShortcutLabel} −)`"
+              :aria-label="t('reader.zoomOut')"
+              :disabled="typeof zoom === 'number' && zoom <= SUMATRA_ZOOM_LEVELS[0] + 0.0001"
+              @click="zoomStep(-1)"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12" /></svg>
+            </button>
+            <span class="cluster-div" aria-hidden="true" />
+            <button
+              ref="zoomTrigger"
+              type="button"
+              class="dock-zoom"
+              :class="{ open: zoomMenu }"
+              :title="t('reader.zoomLevel')"
+              aria-haspopup="menu"
+              :aria-expanded="zoomMenu"
+              @click="toggleZoomMenu"
+            >
+              <span>{{ zoom === 'fit-page' ? t('reader.fitPage') : zoom === 'fit-width' ? t('reader.fitWidth') : zoomPercentLabel(zoom as number) }}</span>
+              <svg class="top-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
+            </button>
+            <span class="cluster-div" aria-hidden="true" />
+            <button
+              type="button"
+              class="top-icon"
+              :title="`${t('reader.zoomIn')} (${primaryShortcutLabel} +)`"
+              :aria-label="t('reader.zoomIn')"
+              :disabled="typeof zoom === 'number' && zoom >= SUMATRA_ZOOM_LEVELS[SUMATRA_ZOOM_LEVELS.length - 1] - 0.0001"
+              @click="zoomStep(1)"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12M12 6v12" /></svg>
+            </button>
+          </div>
+          <button
+            v-else
+            ref="typographyTrigger"
+            type="button"
+            class="dock-zoom top-cluster"
+            :class="{ open: typographyOpen }"
+            :title="t('reader.typography')"
+            aria-haspopup="dialog"
+            :aria-expanded="typographyOpen"
+            @click="toggleTypographyPopover"
+          >
+            <span>Aa · {{ settings.readerPrefs.fontSize }}</span>
+            <svg class="top-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
+          </button>
+        </div>
+
+        <div class="topbar-end">
+          <button
+            ref="viewTrigger"
+            type="button"
+            class="top-btn view-trigger"
+            :class="{ open: viewPanelOpen }"
+            :title="t('reader.viewOptions')"
+            aria-haspopup="dialog"
+            :aria-expanded="viewPanelOpen"
+            @click="toggleViewPanel"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="7" height="14" rx="1.5" /><rect x="13.5" y="5" width="7" height="14" rx="1.5" /></svg>
+            <span class="top-label">{{ t('reader.view') }}</span>
+            <svg class="top-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
+          </button>
+          <template v-if="!topbarNarrow">
+            <button
+              type="button"
+              class="top-btn reader-tool"
+              :class="{ active: ttsState !== 'stopped' || ttsPanel }"
+              :aria-pressed="ttsState !== 'stopped' || ttsPanel"
+              :title="t('tts.title')"
+              @click="openTTSPanel"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 14v-2a8 8 0 0 1 16 0v2" /><rect x="3.5" y="13.5" width="4" height="6" rx="1.5" /><rect x="16.5" y="13.5" width="4" height="6" rx="1.5" /></svg>
+              <span class="top-label">{{ ttsState !== 'stopped' ? t('tts.readingNow') : t('tts.title') }}</span>
+            </button>
+            <button
+              type="button"
+              class="top-btn reader-tool"
+              :class="{ active: autoReading || autoPanel }"
+              :aria-pressed="autoReading || autoPanel"
+              :title="autoReading && !autoPanel ? t('reader.expandAutoControls') : t('reader.autoRead')"
+              @click="toggleAutoPanel"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" /><path d="M10.5 9l4.5 3-4.5 3z" /></svg>
+              <span class="top-label">{{ autoReading ? t('reader.autoReading') : t('reader.autoRead') }}</span>
+            </button>
           </template>
-          <button v-else class="dock-zoom" @click="typographyOpen = !typographyOpen">
-            Aa · {{ settings.readerPrefs.fontSize }}
-            <span class="dock-caret">⌄</span>
-          </button>
-        </div>
-        <span class="toolbar-sep" />
-
-        <div class="toolbar-group toolbar-layout">
-          <div class="reader-segment" role="group" :aria-label="t('reader.mode')">
-            <button
-              type="button"
-              :class="{ active: mode === 'scroll' }"
-              :aria-pressed="mode === 'scroll'"
-              @click="switchMode('scroll')"
-            >{{ t('reader.scrolled') }}</button>
-            <button
-              type="button"
-              :class="{ active: mode === 'paged' }"
-              :aria-pressed="mode === 'paged'"
-              @click="switchMode('paged')"
-            >{{ t('reader.paginated') }}</button>
-          </div>
-          <div class="reader-segment fit-segment" role="group" :aria-label="t('reader.fitHeight') + ' / ' + t('reader.fitWidth')">
-            <button
-              type="button"
-              :class="{ active: zoom === 'fit-page' }"
-              :aria-pressed="zoom === 'fit-page'"
-              @click="setPagedFit('fitH')"
-            >{{ t('reader.fitHeight') }}</button>
-            <button
-              type="button"
-              :class="{ active: zoom === 'fit-width' }"
-              :aria-pressed="zoom === 'fit-width'"
-              @click="setPagedFit('fitW')"
-            >{{ t('reader.fitWidth') }}</button>
-          </div>
-          <!-- 竖屏锁定单页滚动时对页 / 书籍视图不生效, 收起省出工具栏空间 -->
-          <div v-if="!pdfEffective.portraitLocked" class="reader-segment page-view-segment no-phone" role="group" :aria-label="t('reader.pageView')">
-            <button
-              type="button"
-              :class="{ active: spreadMode === 'single' }"
-              :aria-label="t('reader.singlePage')"
-              :title="t('reader.singlePage')"
-              :aria-pressed="spreadMode === 'single'"
-              @click="setSpreadMode('single')"
-            >
-              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5.25 3.5h9.5v13h-9.5z" /></svg>
-            </button>
-            <button
-              type="button"
-              :class="{ active: spreadMode === 'facing' }"
-              :aria-label="t('reader.facingPages')"
-              :title="t('reader.facingPages')"
-              :aria-pressed="spreadMode === 'facing'"
-              @click="setSpreadMode('facing')"
-            >
-              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2.75 4h6v12h-6zM11.25 4h6v12h-6z" /></svg>
-            </button>
-            <button
-              type="button"
-              :class="{ active: spreadMode === 'book' }"
-              :aria-label="t('reader.bookView')"
-              :title="t('reader.bookView')"
-              :aria-pressed="spreadMode === 'book'"
-              @click="setSpreadMode('book')"
-            >
-              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 4.5c2.8-.5 5.1.1 7.5 1.8v10c-2.4-1.7-4.7-2.3-7.5-1.8zM17.5 4.5c-2.8-.5-5.1.1-7.5 1.8v10c2.4-1.7 4.7-2.3 7.5-1.8z" /></svg>
-            </button>
-          </div>
+          <span class="topbar-sep" aria-hidden="true" />
           <button
             type="button"
-            class="reader-tool"
-            :class="{ active: autoReading || autoPanel }"
-            :aria-pressed="autoReading || autoPanel"
-            :title="autoReading && !autoPanel ? t('reader.expandAutoControls') : t('reader.autoRead')"
-            @click="toggleAutoPanel"
-          >
-            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m7 5.25 7 4.75-7 4.75z" /></svg>
-            <span>{{ autoReading ? t('reader.autoReading') : t('reader.autoRead') }}</span>
-          </button>
-          <button
-            type="button"
-            class="reader-tool"
-            :class="{ active: ttsState !== 'stopped' || ttsPanel }"
-            :aria-pressed="ttsState !== 'stopped' || ttsPanel"
-            @click="openTTSPanel"
-          >
-            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 8h3l3-3v10l-3-3H4zM13 7.2a4 4 0 0 1 0 5.6M14.9 5.4a6.5 6.5 0 0 1 0 9.2" /></svg>
-            <span>{{ ttsState !== 'stopped' ? t('tts.readingNow') : t('tts.title') }}</span>
-          </button>
-        </div>
-
-        <span class="toolbar-spacer" />
-        <div class="toolbar-group toolbar-end">
-          <button
-            class="icon-btn"
-            :class="{ 'icon-active': pdfSearchOpen }"
+            class="top-icon"
+            :class="{ on: pdfSearchOpen }"
             :title="`${t('reader.searchInBook')} (${primaryShortcutLabel} F)`"
+            :aria-label="t('reader.searchInBook')"
             :aria-pressed="pdfSearchOpen"
             @click="pdfSearchOpen ? closePdfSearch() : openPdfSearch()"
           >
-            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M10.5 3a7.5 7.5 0 1 0 4.55 13.46l3.75 3.75a1 1 0 0 0 1.4-1.42l-3.74-3.74A7.5 7.5 0 0 0 10.5 3zM5 10.5a5.5 5.5 0 1 1 11 0 5.5 5.5 0 0 1-11 0z"/></svg>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" /><path d="M20 20l-4.2-4.2" /></svg>
           </button>
-          <button class="icon-btn no-phone" :title="`${t('reader.print')} (${primaryShortcutLabel} P)`" @click="printDocument">
-            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" d="M7 8V3h10v5M7 17H5a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M7 14h10v7H7z"/></svg>
+          <button
+            v-if="isPaper"
+            type="button"
+            class="top-btn top-accent"
+            :class="{ open: translateOpen }"
+            :disabled="!pageCount"
+            @click="openRight('translate')"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5h9M8.5 4v1.5M6 5.5c.6 3 2.6 5.4 5.5 6.6M11 5.5c-.7 3.3-2.9 6-6.5 7.5M12.5 20l3.75-9 3.75 9M13.8 17h4.9" /></svg>
+            <span>{{ t('paper.openTranslate') }}</span>
           </button>
-          <button class="icon-btn no-phone" :title="`${t('reader.slideshow')} (F5)`" @click="enterPresentation">
-            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M4 4h16v12H4zM9 20h6M12 16v4m-2.5-9V8l4 3-4 3z"/></svg>
-          </button>
-          <button class="icon-btn" :title="`${t('reader.fullscreen')} (F)`" @click="toggleFullscreen">
-            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5"/></svg>
+          <button
+            v-if="paperAgentRuntimeAvailable()"
+            type="button"
+            class="top-btn top-accent ai-entry"
+            :class="{ open: rightTab === 'agent' }"
+            :disabled="!pageCount"
+            @click="openRight('agent')"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l1.6 4.9 4.9 1.6-4.9 1.6L12 16.5l-1.6-4.9L5.5 10l4.9-1.6zM18.5 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z" /></svg>
+            <span>{{ t('paper.agentTitle') }}</span>
           </button>
           <div class="reader-more-wrap">
             <button
-              class="icon-btn"
-              :class="{ 'icon-active': moreMenu }"
+              type="button"
+              class="top-icon"
+              :class="{ on: moreMenu }"
               :title="t('reader.moreActions')"
+              :aria-label="t('reader.moreActions')"
+              aria-haspopup="menu"
               :aria-expanded="moreMenu"
-              @click="moreMenu = !moreMenu"
+              @click="toggleMoreMenu"
             >
-              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M6 10a2 2 0 1 1 0 4 2 2 0 0 1 0-4zm6 0a2 2 0 1 1 0 4 2 2 0 0 1 0-4zm6 0a2 2 0 1 1 0 4 2 2 0 0 1 0-4z"/></svg>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="12" r=".9" /><circle cx="12" cy="12" r=".9" /><circle cx="18" cy="12" r=".9" /></svg>
             </button>
             <div v-if="moreMenu" class="reader-more-backdrop" @click="moreMenu = false" />
-            <div v-if="moreMenu" class="reader-more-menu card" role="menu">
-              <button role="menuitem" @click="saveDocumentAs">{{ t('reader.saveAs') }}</button>
-              <button role="menuitem" @click="openDocumentFolder">{{ t('reader.openFolder') }}</button>
-              <button role="menuitem" @click="openProperties">{{ t('reader.properties') }}</button>
-              <button role="menuitem" @click="toggleDrawerTab('annotations'); moreMenu = false">{{ t('reader.comments') }}</button>
+            <div v-if="moreMenu" class="top-menu card" role="menu" @keydown.esc.stop="moreMenu = false">
+              <template v-if="topbarNarrow">
+                <button type="button" role="menuitem" @click="runFromToolbarPopover(openTTSPanel)">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 14v-2a8 8 0 0 1 16 0v2" /><rect x="3.5" y="13.5" width="4" height="6" rx="1.5" /><rect x="16.5" y="13.5" width="4" height="6" rx="1.5" /></svg>
+                  <span>{{ ttsState !== 'stopped' ? t('tts.readingNow') : t('tts.title') }}</span>
+                </button>
+                <button type="button" role="menuitem" @click="runFromToolbarPopover(toggleAutoPanel)">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" /><path d="M10.5 9l4.5 3-4.5 3z" /></svg>
+                  <span>{{ autoReading ? t('reader.autoReading') : t('reader.autoRead') }}</span>
+                </button>
+                <span class="top-menu-div" role="separator" />
+              </template>
+              <template v-if="isPaper && bdSupported">
+                <button type="button" role="menuitem" :title="t('paper.bdTooltip')" @click="runFromToolbarPopover(openBabeldoc)">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5h9M8.5 4v1.5M6 5.5c.6 3 2.6 5.4 5.5 6.6M11 5.5c-.7 3.3-2.9 6-6.5 7.5M12.5 20l3.75-9 3.75 9M13.8 17h4.9" /></svg>
+                  <span>{{ t('paper.bdButton') }}</span>
+                </button>
+                <span class="top-menu-div" role="separator" />
+              </template>
+              <button type="button" role="menuitem" @click="runFromToolbarPopover(() => router.push(backTarget))">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h11l-3-3M17 17H6l3 3" /></svg>
+                <span>{{ t('reader.changeDocument') }}</span>
+              </button>
+              <button type="button" role="menuitem" @click="runFromToolbarPopover(printDocument)">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 9V4h10v5M7 17H5a1.5 1.5 0 0 1-1.5-1.5v-5A1.5 1.5 0 0 1 5 9h14a1.5 1.5 0 0 1 1.5 1.5v5A1.5 1.5 0 0 1 19 17h-2M7 14h10v6H7z" /></svg>
+                <span>{{ t('reader.print') }}</span>
+                <kbd aria-hidden="true">{{ primaryShortcutLabel }} P</kbd>
+              </button>
+              <button type="button" role="menuitem" @click="runFromToolbarPopover(saveDocumentAs)">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0l-4-4m4 4l4-4M5 19h14" /></svg>
+                <span>{{ t('reader.saveAs') }}</span>
+                <kbd aria-hidden="true">{{ primaryShortcutLabel }} S</kbd>
+              </button>
+              <button type="button" role="menuitem" @click="runFromToolbarPopover(openDocumentFolder)">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 7.5A1.5 1.5 0 0 1 5 6h4l2 2h8a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 1 19 19H5a1.5 1.5 0 0 1-1.5-1.5z" /></svg>
+                <span>{{ t('reader.openFolder') }}</span>
+              </button>
+              <button type="button" role="menuitem" @click="runFromToolbarPopover(openProperties)">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" /><path d="M12 11v5M12 8h.01" /></svg>
+                <span>{{ t('reader.properties') }}</span>
+              </button>
+              <button type="button" role="menuitem" @click="runFromToolbarPopover(() => toggleDrawerTab('annotations'))">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5.5h14v10H9.5L5 19z" /></svg>
+                <span>{{ t('reader.comments') }}</span>
+              </button>
+              <span class="top-menu-div" role="separator" />
               <button
+                type="button"
                 role="menuitemcheckbox"
-                class="more-check"
                 :aria-checked="settings.reader.portraitScroll"
                 :title="t('reader.portraitScrollTitle')"
                 @click="settings.reader.portraitScroll = !settings.reader.portraitScroll; moreMenu = false"
               >
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="3.5" width="10" height="17" rx="2" /><path d="M11 17.5h2" /></svg>
                 <span>{{ t('reader.portraitScrollMenu') }}</span>
-                <svg v-if="settings.reader.portraitScroll" viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M4.5 10.5l3.5 3.5 7.5-8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg>
+                <svg v-if="settings.reader.portraitScroll" class="top-menu-check" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+              </button>
+              <button type="button" role="menuitem" @click="runFromToolbarPopover(toggleShortcutGuide)">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6.5" width="18" height="11" rx="2" /><path d="M7 10h.01M10 10h.01M13 10h.01M16 10h.01M8 14h8" /></svg>
+                <span>{{ t('reader.keyboardShortcuts') }}</span>
+                <kbd aria-hidden="true">?</kbd>
               </button>
             </div>
           </div>
-          <button
-            class="icon-btn shortcut-trigger no-phone"
-            :class="{ 'icon-active': shortcutsOpen }"
-            :title="`${t('reader.keyboardShortcuts')} (?)`"
-            :aria-label="t('reader.keyboardShortcuts')"
-            :aria-pressed="shortcutsOpen"
-            @click="toggleShortcutGuide"
-          >?</button>
         </div>
       </div>
     </header>
+
+    <!-- 桌面顶栏弹层: fixed 定位在触发按钮正下方 (popoverAnchor) -->
+    <div v-if="zoomMenu && pdfLayout === 'original'" class="zoom-backdrop" @click="zoomMenu = false" />
+    <div
+      v-if="zoomMenu && pdfLayout === 'original'"
+      ref="zoomMenuEl"
+      class="zoom-menu toolbar-popover card"
+      role="menu"
+      :aria-label="t('reader.zoomLevel')"
+      :style="{ top: `${popoverAnchor.top}px`, left: `${popoverAnchor.left}px`, width: `${ZOOM_MENU_WIDTH}px` }"
+      @keydown="onZoomMenuKeydown"
+    >
+      <div class="popover-heading">{{ t('reader.zoomLevel') }}</div>
+      <div class="zoom-grid">
+        <button
+          v-for="p in ZOOM_MENU_PRESETS"
+          :key="p"
+          type="button"
+          role="menuitemradio"
+          tabindex="-1"
+          class="zoom-item"
+          :class="{ active: typeof zoom === 'number' && Math.abs((zoom as number) - p) < 0.001 }"
+          :aria-checked="typeof zoom === 'number' && Math.abs((zoom as number) - p) < 0.001"
+          @click="pickZoom(p)"
+        >{{ zoomPercentLabel(p) }}</button>
+      </div>
+      <span class="popover-divider" role="separator" />
+      <button
+        type="button"
+        role="menuitemradio"
+        tabindex="-1"
+        class="zoom-item zoom-fit"
+        :class="{ active: zoom === 'fit-page' }"
+        :aria-checked="zoom === 'fit-page'"
+        @click="pickZoom('fit-page')"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="3.5" width="10" height="17" rx="1.5" /><path d="M12 7v10M10 9l2-2 2 2M10 15l2 2 2-2" /></svg>
+        <span>{{ t('reader.fitPage') }}</span>
+        <svg v-if="zoom === 'fit-page'" class="zoom-check" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+      </button>
+      <button
+        type="button"
+        role="menuitemradio"
+        tabindex="-1"
+        class="zoom-item zoom-fit"
+        :class="{ active: zoom === 'fit-width' }"
+        :aria-checked="zoom === 'fit-width'"
+        @click="pickZoom('fit-width')"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="6" width="17" height="12" rx="1.5" /><path d="M7 12h10M9 10l-2 2 2 2M15 10l2 2-2 2" /></svg>
+        <span>{{ t('reader.fitWidth') }}</span>
+        <svg v-if="zoom === 'fit-width'" class="zoom-check" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+      </button>
+      <p class="zoom-hint">
+        <span>{{ t('reader.zoomWheelHint', { key: primaryShortcutLabel }) }}</span>
+        <span><kbd>{{ primaryShortcutLabel }}</kbd> <kbd>0</kbd> {{ t('reader.zoomResetHint') }}</span>
+      </p>
+    </div>
+
+    <div v-if="viewPanelOpen" class="zoom-backdrop" @click="viewPanelOpen = false" />
+    <section
+      v-if="viewPanelOpen"
+      ref="viewPanelEl"
+      class="view-panel toolbar-popover card"
+      role="dialog"
+      :aria-label="t('reader.viewOptions')"
+      :style="{ top: `${popoverAnchor.top}px`, left: `${popoverAnchor.left}px`, width: `${VIEW_PANEL_WIDTH}px` }"
+      @keydown="onViewPanelKeydown"
+    >
+      <div class="view-section" role="group" :aria-label="t('reader.mode')">
+        <h3>{{ t('reader.mode') }}</h3>
+        <div class="view-choices two">
+          <button type="button" class="view-choice" :class="{ active: mode === 'scroll' }" :aria-pressed="mode === 'scroll'" @click="switchMode('scroll')">
+            <svg viewBox="0 0 44 30" aria-hidden="true"><rect class="fill" x="14" y="-6" width="16" height="16" rx="1.5" /><rect class="fill" x="14" y="13" width="16" height="16" rx="1.5" /><path d="M38 6v18M36 21l2 3 2-3" /></svg>
+            <span>{{ t('reader.scrolled') }}</span>
+          </button>
+          <button type="button" class="view-choice" :class="{ active: mode === 'paged' }" :aria-pressed="mode === 'paged'" @click="switchMode('paged')">
+            <svg viewBox="0 0 44 30" aria-hidden="true"><rect class="fill" x="13" y="3" width="18" height="24" rx="1.5" /><path d="M6 15h3M7.5 13.5 6 15l1.5 1.5M38 15h-3M36.5 13.5 38 15l-1.5 1.5" /></svg>
+            <span>{{ t('reader.paginated') }}</span>
+          </button>
+        </div>
+      </div>
+      <!-- 竖屏锁定单页滚动时对页 / 书籍视图不生效 -->
+      <div v-if="!pdfEffective.portraitLocked" class="view-section" role="group" :aria-label="t('reader.pageView')">
+        <h3>{{ t('reader.pageView') }}</h3>
+        <div class="view-choices three">
+          <button type="button" class="view-choice" :class="{ active: spreadMode === 'single' }" :aria-pressed="spreadMode === 'single'" @click="setSpreadMode('single')">
+            <svg viewBox="0 0 44 30" aria-hidden="true"><rect class="fill" x="13" y="3" width="18" height="24" rx="1.5" /></svg>
+            <span>{{ t('reader.singlePage') }}</span>
+          </button>
+          <button type="button" class="view-choice" :class="{ active: spreadMode === 'facing' }" :aria-pressed="spreadMode === 'facing'" @click="setSpreadMode('facing')">
+            <svg viewBox="0 0 44 30" aria-hidden="true"><rect class="fill" x="4" y="3" width="17" height="24" rx="1.5" /><rect class="fill" x="23" y="3" width="17" height="24" rx="1.5" /></svg>
+            <span>{{ t('reader.facingPages') }}</span>
+          </button>
+          <button type="button" class="view-choice" :class="{ active: spreadMode === 'book' }" :aria-pressed="spreadMode === 'book'" @click="setSpreadMode('book')">
+            <svg viewBox="0 0 44 30" aria-hidden="true"><path class="fill" d="M22 6c-5-3-11-3-17-1.5v21.5c6-1.5 12-1.5 17 1.5zM22 6c5-3 11-3 17-1.5v21.5c-6-1.5-12-1.5-17 1.5z" /></svg>
+            <span>{{ t('reader.bookView') }}</span>
+          </button>
+        </div>
+      </div>
+      <div class="view-section" role="group" :aria-label="t('reader.pageFit')">
+        <h3>{{ t('reader.pageFit') }}</h3>
+        <div class="view-segment">
+          <button type="button" :class="{ active: zoom === 'fit-page' }" :aria-pressed="zoom === 'fit-page'" @click="setPagedFit('fitH')">{{ t('reader.fitHeight') }}</button>
+          <button type="button" :class="{ active: zoom === 'fit-width' }" :aria-pressed="zoom === 'fit-width'" @click="setPagedFit('fitW')">{{ t('reader.fitWidth') }}</button>
+        </div>
+      </div>
+      <div class="view-actions">
+        <button type="button" :aria-label="`${t('reader.fullscreen')} (F)`" @click="runFromToolbarPopover(toggleFullscreen)">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5" /></svg>
+          <span>{{ t('reader.fullscreen') }}</span>
+          <kbd aria-hidden="true">F</kbd>
+        </button>
+        <button type="button" :aria-label="`${t('reader.slideshow')} (F5)`" @click="runFromToolbarPopover(enterPresentation)">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="11" rx="1.5" /><path d="M12 15.5V20M8.5 20h7M10.5 8.2v4.6l3.8-2.3z" /></svg>
+          <span>{{ t('reader.slideshow') }}</span>
+          <kbd aria-hidden="true">F5</kbd>
+        </button>
+      </div>
+    </section>
 
     <button
       v-if="isFullscreen && !presentationMode && !tocOpen"
@@ -4586,24 +4874,6 @@ onBeforeUnmount(() => clearTimeout(phoneBarsTimer))
           </div>
         </div>
 
-        <!-- 缩放档位菜单 -->
-        <div v-if="zoomMenu && pdfLayout === 'original'" class="zoom-backdrop" @click="zoomMenu = false" />
-        <div v-if="zoomMenu && pdfLayout === 'original'" class="zoom-menu card">
-          <button
-            v-for="p in ZOOM_PRESETS"
-            :key="p"
-            class="zoom-item"
-            :class="{ active: typeof zoom === 'number' && Math.abs((zoom as number) - p) < 0.001 }"
-            @click="pickZoom(p)"
-          >{{ zoomPercentLabel(p) }}</button>
-          <button class="zoom-item" :class="{ active: zoom === 'fit-page' }" @click="pickZoom('fit-page')">
-            {{ t('reader.fitPage') }}
-          </button>
-          <button class="zoom-item" :class="{ active: zoom === 'fit-width' }" @click="pickZoom('fit-width')">
-            {{ t('reader.fitWidth') }}
-          </button>
-        </div>
-
         <div v-if="shortcutsOpen" class="zoom-backdrop" @click="shortcutsOpen = false" />
         <section
           v-if="shortcutsOpen"
@@ -4635,7 +4905,14 @@ onBeforeUnmount(() => clearTimeout(phoneBarsTimer))
         </section>
 
         <div v-if="typographyOpen && pdfLayout === 'reflow'" class="zoom-backdrop" @click="typographyOpen = false" />
-        <div v-if="typographyOpen && pdfLayout === 'reflow'" class="reflow-settings card">
+        <div
+          v-if="typographyOpen && pdfLayout === 'reflow'"
+          class="reflow-settings toolbar-popover card"
+          role="dialog"
+          :aria-label="t('reader.typography')"
+          :style="{ top: `${popoverAnchor.top}px`, left: `${popoverAnchor.left}px` }"
+          @keydown.esc.stop="typographyOpen = false; typographyTrigger?.focus()"
+        >
           <label>
             <span>{{ t('reader.fontSize') }}</span>
             <input :value="settings.readerPrefs.fontSize" @input="settings.setReaderPreference('fontSize', Number(($event.target as HTMLInputElement).value))" type="range" min="12" max="36" step="1" />
@@ -5302,194 +5579,7 @@ onBeforeUnmount(() => clearTimeout(phoneBarsTimer))
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-.paper-context-actions {
-  flex: 0 1 auto;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 6px;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-.paper-context-actions::-webkit-scrollbar {
-  display: none;
-}
-.paper-context-actions .context-action {
-  flex: 0 0 auto;
-  height: 34px;
-  padding: 0 12px;
-  border-color: transparent;
-  background: transparent;
-  color: var(--text-2);
-  box-shadow: none;
-}
-.paper-context-actions .context-action:hover,
-.paper-context-actions .context-action.btn-active,
-.paper-context-actions .context-action.btn-primary {
-  border-color: color-mix(in srgb, var(--brand) 16%, transparent);
-  background: color-mix(in srgb, var(--brand) 8%, var(--card));
-  color: var(--brand);
-}
-.change-document {
-  flex: 0 0 auto;
-  height: 36px;
-  margin-left: 6px;
-  padding: 0 16px;
-  border-color: var(--border);
-  background: var(--card);
-  color: var(--text-2);
-  font-weight: 550;
-}
-.pdf-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 52px;
-  padding: 7px 12px;
-  min-width: 0;
-  overflow-x: auto;
-  scrollbar-width: none;
-  background: var(--card);
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
-}
-.pdf-toolbar::-webkit-scrollbar {
-  display: none;
-}
-.toolbar-group {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-}
-.toolbar-layout {
-  gap: 6px;
-}
-.toolbar-page {
-  gap: 4px;
-}
-.toolbar-zoom {
-  min-width: 132px;
-  justify-content: center;
-}
-.toolbar-end {
-  position: sticky;
-  right: 0;
-  padding-left: 6px;
-  background: var(--card);
-  box-shadow: -10px 0 12px var(--card);
-}
-.toolbar-spacer {
-  flex: 1 1 24px;
-  min-width: 12px;
-}
-.toolbar-sep {
-  flex: 0 0 auto;
-  width: 1px;
-  height: 24px;
-  margin: 0 3px;
-  background: var(--border);
-}
 
-/* 藏书 PDF 阅读控制：统一尺寸与选中语言，避免工具条像一排表单按钮。 */
-.reader-segment {
-  display: inline-flex;
-  align-items: center;
-  flex-shrink: 0;
-  gap: 2px;
-  height: 36px;
-  padding: 3px;
-  border-radius: 9px;
-  background: var(--surface-2);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 4%, transparent);
-}
-.reader-segment button {
-  min-width: 46px;
-  height: 30px;
-  padding: 0 9px;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--text-2);
-  font-size: 13px;
-  font-weight: 500;
-  line-height: 1;
-  white-space: nowrap;
-  transition: color 0.18s ease, background-color 0.18s ease, box-shadow 0.18s ease, transform 0.12s ease;
-}
-.reader-segment button:hover:not(.active) {
-  color: var(--text);
-  background: color-mix(in srgb, var(--card) 62%, transparent);
-}
-.reader-segment button.active {
-  color: var(--brand);
-  background: var(--card);
-  box-shadow: 0 1px 3px rgba(22, 100, 255, 0.12), 0 0 0 1px rgba(22, 100, 255, 0.08);
-}
-.reader-tool {
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  height: 36px;
-  padding: 0 10px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--text-2);
-  font-size: 13px;
-  font-weight: 500;
-  line-height: 1;
-  white-space: nowrap;
-  box-shadow: none;
-  transition: color 0.18s ease, border-color 0.18s ease, background-color 0.18s ease, box-shadow 0.18s ease, transform 0.12s ease;
-}
-.reader-tool svg {
-  width: 16px;
-  height: 16px;
-  flex-shrink: 0;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.6;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-.reader-tool:hover {
-  color: var(--brand);
-  border-color: color-mix(in srgb, var(--brand) 25%, transparent);
-  background: var(--brand-soft);
-}
-.reader-tool.active {
-  color: var(--brand);
-  border-color: rgba(22, 100, 255, 0.18);
-  background: var(--brand-light, #e8f0ff);
-  box-shadow: inset 0 0 0 1px rgba(22, 100, 255, 0.04);
-}
-.reader-segment button:active,
-.reader-tool:active {
-  transform: translateY(1px);
-}
-.reader-segment button:focus-visible,
-.reader-tool:focus-visible {
-  outline: 2px solid rgba(22, 100, 255, 0.55);
-  outline-offset: 2px;
-}
-.page-view-segment button {
-  min-width: 36px;
-  width: 36px;
-  padding: 0;
-}
-.page-view-segment svg {
-  width: 17px;
-  height: 17px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.45;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
 .reader-more-wrap {
   position: relative;
 }
@@ -5535,22 +5625,6 @@ onBeforeUnmount(() => clearTimeout(phoneBarsTimer))
   background: var(--bg);
   color: var(--brand);
 }
-.paper-pagenum {
-  font-size: 12.5px;
-  color: var(--text-3);
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  white-space: nowrap;
-}
-.page-input {
-  width: 54px;
-  height: 34px;
-  text-align: center;
-  font-size: 13px;
-  padding: 0 2px;
-  font-variant-numeric: tabular-nums;
-}
 .icon-btn {
   width: 36px;
   height: 36px;
@@ -5577,6 +5651,504 @@ onBeforeUnmount(() => clearTimeout(phoneBarsTimer))
 .btn-active {
   border-color: var(--brand);
   color: var(--brand);
+}
+
+/* ---- 桌面单行顶栏 (≥721px): 左 标题 · 中 翻页 / 缩放 · 右 功能 ----
+   三列网格让中间组始终居中; 右侧放不下时由 .compact 收起文字标签 */
+.pdf-topbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(auto, 1fr);
+  align-items: center;
+  gap: 16px;
+  height: 56px;
+  padding: 0 12px;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+}
+.topbar-start,
+.topbar-end {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.topbar-end {
+  justify-content: flex-end;
+}
+.topbar-center {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.topbar-title {
+  min-width: 0;
+  margin-left: 6px;
+  line-height: 1.25;
+}
+.topbar-title strong {
+  display: block;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.topbar-title span {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-3);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.topbar-sep {
+  flex-shrink: 0;
+  width: 1px;
+  height: 18px;
+  margin: 0 4px;
+  background: var(--border);
+}
+.pdf-topbar svg,
+.toolbar-popover svg {
+  flex-shrink: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.top-icon,
+.top-btn,
+.dock-zoom {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-2);
+  white-space: nowrap;
+  touch-action: manipulation;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.top-icon {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+}
+.top-icon svg,
+.top-btn svg {
+  width: 18px;
+  height: 18px;
+}
+.top-btn {
+  gap: 6px;
+  height: 34px;
+  padding: 0 10px;
+  font-size: 13px;
+  font-weight: 500;
+}
+.top-icon:hover:not(:disabled),
+.top-btn:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.top-icon.on,
+.top-btn.open,
+.top-btn.active {
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+.top-icon:disabled,
+.top-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.top-accent {
+  color: var(--brand);
+  background: var(--brand-soft);
+}
+.top-accent:hover:not(:disabled) {
+  color: var(--brand);
+  background: color-mix(in srgb, var(--brand) 16%, transparent);
+}
+.top-accent.open {
+  background: var(--brand);
+  color: var(--on-brand);
+}
+.top-chevron {
+  width: 12px !important;
+  height: 12px !important;
+  color: var(--text-3);
+  transition: transform 0.15s ease;
+}
+.open > .top-chevron {
+  color: currentColor;
+  transform: rotate(180deg);
+}
+.pdf-topbar.compact .top-label {
+  display: none;
+}
+.pdf-topbar.compact .top-btn:not(.top-accent) {
+  padding: 0 8px;
+}
+
+/* 翻页 / 缩放: 白底细描边一组, 数字等宽, 切换百分比时宽度不跳 */
+.top-cluster {
+  display: inline-flex;
+  align-items: center;
+  height: 34px;
+  border-radius: 9px;
+  background: var(--card);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.top-cluster .top-icon {
+  width: 32px;
+  height: 32px;
+}
+.top-cluster .top-icon svg {
+  width: 16px;
+  height: 16px;
+}
+.cluster-div {
+  width: 1px;
+  height: 16px;
+  background: var(--border);
+}
+.paper-pagenum {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 0 4px;
+  color: var(--text-3);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.page-input {
+  width: 4ch;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  outline: none;
+}
+.page-input:hover {
+  background: var(--surface-2);
+}
+.page-input:focus {
+  background: var(--surface-2);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--brand) 45%, transparent);
+}
+.dock-zoom {
+  gap: 2px;
+  min-width: 82px;
+  height: 32px;
+  padding: 0 6px 0 8px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.dock-zoom:hover,
+.dock-zoom.open {
+  background: var(--surface-2);
+  color: var(--brand);
+}
+.dock-zoom.top-cluster {
+  height: 34px;
+  padding: 0 10px 0 12px;
+}
+.top-icon:focus-visible,
+.top-btn:focus-visible,
+.dock-zoom:focus-visible,
+.view-choice:focus-visible,
+.view-segment button:focus-visible,
+.view-actions button:focus-visible,
+.top-menu button:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+/* 「更多」菜单 (桌面): 图标 + 文案 + 快捷键 */
+.top-menu {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 73;
+  width: 236px;
+  padding: 6px;
+  border-radius: 12px;
+  box-shadow: 0 12px 32px -6px color-mix(in srgb, var(--text) 22%, transparent);
+  animation: toolbar-popover-in 0.14s ease-out;
+}
+.top-menu button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+}
+.top-menu button > span {
+  flex: 1;
+}
+.top-menu button svg {
+  width: 16px;
+  height: 16px;
+  color: var(--text-3);
+}
+.top-menu button:hover {
+  background: var(--surface-2);
+}
+.top-menu .top-menu-check {
+  color: var(--brand);
+}
+.top-menu-div,
+.popover-divider {
+  display: block;
+  height: 1px;
+  margin: 5px 6px;
+  background: var(--border);
+}
+.top-menu kbd,
+.zoom-hint kbd,
+.view-actions kbd {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  box-shadow: inset 0 -1px 0 var(--border);
+  color: var(--text-3);
+  font: 600 10.5px/17px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  text-align: center;
+}
+
+/* 顶栏弹层: anchorPopover() 写入视口坐标, 贴在触发按钮下方 */
+.toolbar-popover {
+  position: fixed;
+  z-index: 71;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100dvh - 72px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-radius: 12px;
+  box-shadow: 0 12px 32px -6px color-mix(in srgb, var(--text) 22%, transparent);
+  animation: toolbar-popover-in 0.14s ease-out;
+}
+@keyframes toolbar-popover-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+.zoom-menu {
+  padding: 6px;
+}
+.popover-heading {
+  padding: 6px 10px 4px;
+  color: var(--text-3);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.zoom-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 2px;
+  padding: 2px;
+}
+.zoom-item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+.zoom-item:hover,
+.zoom-item:focus-visible {
+  outline: none;
+  background: var(--surface-2);
+}
+.zoom-item.active {
+  color: var(--brand);
+  font-weight: 600;
+}
+.zoom-grid .zoom-item.active {
+  background: var(--brand-soft);
+}
+.zoom-fit {
+  width: 100%;
+  justify-content: flex-start;
+}
+.zoom-fit span {
+  flex: 1;
+  text-align: left;
+}
+.zoom-fit svg {
+  width: 16px;
+  height: 16px;
+  color: var(--text-3);
+}
+.zoom-fit.active svg,
+.zoom-check {
+  color: var(--brand) !important;
+}
+.zoom-hint {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 0;
+  padding: 8px 10px 4px;
+  border-top: 1px solid var(--border);
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+
+/* 视图面板: 阅读方式 / 页面视图用示意图卡片, 适配用分段, 底部全屏 / 放映 */
+.view-panel {
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+}
+.view-section h3 {
+  margin: 0 0 8px;
+  color: var(--text-3);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.view-choices {
+  display: grid;
+  gap: 8px;
+}
+.view-choices.two {
+  grid-template-columns: 1fr 1fr;
+}
+.view-choices.three {
+  grid-template-columns: 1fr 1fr 1fr;
+}
+.view-choice {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 6px 8px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 12px;
+  box-shadow: inset 0 0 0 1px transparent;
+  transition: box-shadow 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+}
+.view-choice:hover {
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+.view-choice.active {
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-weight: 600;
+  box-shadow: inset 0 0 0 1.5px var(--brand);
+}
+.view-choice svg {
+  width: 44px;
+  height: 30px;
+  stroke-width: 1.4;
+}
+.view-choice svg .fill {
+  fill: currentColor;
+  fill-opacity: 0.14;
+}
+.view-segment {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 9px;
+  background: var(--surface-2);
+}
+.view-segment button {
+  flex: 1;
+  height: 30px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+.view-segment button:hover:not(.active) {
+  color: var(--text);
+}
+.view-segment button.active {
+  background: var(--card);
+  color: var(--brand);
+  font-weight: 600;
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 10%, transparent);
+}
+.view-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.view-actions button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 13px;
+  transition: background-color 0.15s ease;
+}
+.view-actions button > span {
+  flex: 1;
+  text-align: left;
+}
+.view-actions button svg {
+  width: 16px;
+  height: 16px;
+  color: var(--text-2);
+}
+.view-actions button:hover {
+  background: var(--surface-3);
+}
+@media (prefers-reduced-motion: reduce) {
+  .toolbar-popover,
+  .top-menu {
+    animation: none;
+  }
+  .top-chevron {
+    transition: none;
+  }
 }
 .paper-state {
   flex: 1;
@@ -5767,51 +6339,10 @@ onBeforeUnmount(() => clearTimeout(phoneBarsTimer))
   margin: 0;
 }
 
-/* ---- 顶部阅读控制：缩放档位 / 快捷键 ---- */
-.dock-zoom {
-  min-width: 72px;
-  height: 36px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  font-size: 12.5px;
-  color: var(--text-2);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 3px;
-  white-space: nowrap;
-}
-.dock-zoom:hover {
-  background: var(--bg);
-  color: var(--brand);
-}
-.dock-caret {
-  margin-top: -2px;
-  font-size: 12px;
-  color: var(--text-3);
-}
 .zoom-backdrop {
   position: fixed;
   inset: 0;
   z-index: 70;
-}
-.zoom-menu {
-  position: absolute;
-  top: 10px;
-  left: 50%;
-  transform: translateX(calc(-50% - 40px));
-  z-index: 71;
-  display: flex;
-  flex-direction: column;
-  padding: 6px;
-  border-radius: 10px;
-  min-width: 96px;
-}
-.shortcut-trigger {
-  font-size: 14px;
-  font-weight: 700;
 }
 .shortcut-menu {
   position: absolute;
@@ -5878,31 +6409,10 @@ onBeforeUnmount(() => clearTimeout(phoneBarsTimer))
   text-align: center;
   white-space: nowrap;
 }
-.zoom-item {
-  border: none;
-  background: none;
-  text-align: left;
-  font-size: 13px;
-  color: var(--text-2);
-  padding: 7px 12px;
-  border-radius: 6px;
-}
-.zoom-item:hover {
-  background: var(--bg);
-}
-.zoom-item.active {
-  color: var(--brand);
-  font-weight: 600;
-}
 .reflow-settings {
-  position: absolute;
-  top: 10px;
-  left: 50%;
-  z-index: 71;
-  width: min(340px, calc(100% - 32px));
+  width: min(340px, calc(100vw - 16px));
   padding: 14px 16px;
   border-radius: 12px;
-  transform: translateX(-50%);
 }
 .reflow-settings label {
   display: grid;
@@ -7052,16 +7562,6 @@ onBeforeUnmount(() => clearTimeout(phoneBarsTimer))
   .paper-bar {
     gap: 10px;
   }
-  .paper-context-actions .context-action {
-    padding: 0 9px;
-  }
-  .reader-segment button {
-    min-width: 42px;
-    padding-inline: 7px;
-  }
-  .reader-tool {
-    padding-inline: 8px;
-  }
 }
 
 @media (max-width: 860px) {
@@ -7075,21 +7575,12 @@ onBeforeUnmount(() => clearTimeout(phoneBarsTimer))
   .paper-document {
     flex-basis: 210px;
   }
-  .paper-context-actions {
-    max-width: 58%;
+  .pdf-topbar {
+    gap: 8px;
+    padding: 0 8px;
   }
-  .paper-context-actions .context-action {
-    height: 32px;
-    padding-inline: 8px;
-  }
-  .change-document {
-    height: 34px;
-    margin-left: 2px;
-    padding-inline: 12px;
-  }
-  .pdf-toolbar {
-    min-height: 50px;
-    padding: 6px 8px;
+  .topbar-center {
+    gap: 6px;
   }
   .paper-split {
     flex-direction: row;
