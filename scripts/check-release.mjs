@@ -48,6 +48,8 @@ function repositoryVersion(tag, platform = 'desktop') {
     assert.ok(!mobile.identifier && !mobile.bundle, 'mobile version config must not override application identity')
     version = validateVersions({ 'package.json': mobile.version }, tag?.replace(/^app-/, ''))
   }
+  // 桌面与 App 分开发版: 桌面 vX.Y.Z (package.json 等), App app-vX.Y.Z (tauri.<platform>.conf.json)
+  if (tag && platform !== 'desktop') assert.match(tag, /^app-v/, 'App releases use app-vX.Y.Z tags')
   if (tag) assert.equal(platform === 'desktop' ? tag : tag.replace(/^app-/, ''), `v${version}`, 'release tag does not match platform version')
   const [major, minor, patch] = version.split('.').map(Number)
   const versionCode = config.bundle?.android?.versionCode ?? major * 1_000_000 + minor * 1_000 + patch

@@ -67,11 +67,12 @@ test('App tags survive checksum/download mirror routing exactly', () => {
 test('release gates accept App platform tags and reject them for desktop', () => {
   const { version } = JSON.parse(readFileSync(new URL('../src-tauri/tauri.android.conf.json', import.meta.url), 'utf8'))
   execFileSync(process.execPath, ['scripts/check-release.mjs', '--platform', 'android', '--tag', `app-v${version}`])
-  execFileSync(process.execPath, ['scripts/check-release.mjs', '--platform', 'android', '--tag', `v${version}`])
+  assert.throws(() => execFileSync(process.execPath, ['scripts/check-release.mjs', '--platform', 'android', '--tag', `v${version}`], { stdio: 'pipe' }))
   assert.throws(() => execFileSync(process.execPath, ['scripts/check-release.mjs', '--platform', 'desktop', '--tag', `app-v${version}`], { stdio: 'pipe' }))
 })
 
-test('App accepts unified v2+ Android releases from both sources', () => {
+// v2.2.0–v2.2.5 曾统一用 vX.Y.Z 发全平台; 已安装的 App 仍要能读这些带 APK 的旧版本
+test('App still reads legacy unified v2.2.x Android releases from both sources', () => {
   for (const parse of [mobile.parseGithubReleases, mobile.parseMirrorReleases]) {
     const info = parse([release('v1.20.1'), release('app-v2.0.0'), release('v2.0.1'),
       { ...release('v3.0.0'), prerelease: true }, release('v4.0.0', ['SHA256SUMS'])])

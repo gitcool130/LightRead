@@ -3,28 +3,24 @@
 开源、本地优先的电子书 / 论文阅读器。桌面 (Tauri 2) + 网页 PWA + Android 实验版。
 产品定位与已定决策见 `docs/产品设计.md`，论文阅读链路见 `docs/paper-reading.md`。
 
-## 分支分工（2026-10-17 用户确认）
+## 分支与版本（2026-10-25 用户确认：桌面与 App 分开发版）
 
-- `release/1.20.0`：1.x 全平台最终版封存分支，tag `v1.20.0`；已发布内容不混入 2.0 开发。
-- `Dev`：后续 App 2.0 开发主线，工作目录 `/home/ubuntu/workspace/LightRead-v2`。原 `feat/lightread-2.0` 只保留历史。
-- `main` 保持原有代码。**2026-10-22 用户确认：桌面与 App 对齐，从 v2.2.0 起同一分支 (`Dev`)、同一提交、同一版本号发布全平台 `vX.Y.Z`**；桌面直接从 tag 源码构建，不再用 `scripts/desktop-release.json` 固定旧基线 (已删除；workflow 只在该文件存在时走基线补丁)。不维护桌面 / App 两条分支：共享层 (存储、同步、阅读引擎、全部 Rust) 一处修复两端生效，界面差异仍由 `src/mobile/` 覆盖清单隔离。
-- 新版统一使用 `vX.Y.Z` 全平台 Release，完整校验后设为 GitHub latest；GitCode 保留旧版与字体资源（`KEEP_OLD=1`）。历史 `app-v2.0.0` 保留，不能移动或删除；该旧 APK 只识别 `app-v2.x`，首次高于 2.0.0 的后续版本还需发布同 APK 的 `app-vX.Y.Z` 兼容入口（latest=false），供旧 App 迁移到统一更新器。
-- Release 标题仅使用版本号。App 默认在线语音；K30 已将旧离线选择改为在线，后续测试恢复设置时不要改回离线。
+- **`main` 是唯一开发主干**，桌面与 App 共用。共享层（存储、同步、阅读引擎、全部 Rust）一处修改两端生效。App 专属界面在 `src/mobile/`，由构建平台选择（`vite.platform.ts`），不按窗口宽度切换产品；桌面借鉴 App 设计时改桌面自己的文件，不直接引用 `src/mobile/`（见 `src/mobile/README.md`）。PDF 重排等 App 功能的入口留在 `src/mobile/`，引擎可放共享服务。
+- 只有在给已发布版本打补丁、而 `main` 已有未发布改动时，才从对应 tag 拉 `release/desktop-X.Y` 或 `release/app-X.Y`；修复先进 `main` 再 cherry-pick。
+- 只读历史分支：`archive/main-1.x`（1.x 桌面旧主干）、`release/1.20.0`（1.x 全平台最终版）。原 `Dev` 已并入 `main`。
+- 两条版本线各自递增，互不等待：
 
-## 本次 App PDF 发布（2026-10-20 用户确认）
+| | tag | 版本来源 | GitHub Release |
+|---|---|---|---|
+| 桌面（Windows / macOS / Linux，网页） | `vX.Y.Z` | `package.json`、`package-lock.json`（顶层与根包）、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`（lightread 包） | 设为 latest，**不含 APK** |
+| App（Android / iOS） | `app-vX.Y.Z` | `src-tauri/tauri.android.conf.json`、`src-tauri/tauri.ios.conf.json` | `latest=false` |
 
-- PDF 双形态阅读仅属于 App，正式版本 `app-v2.1.0`；桌面和默认 Web 保持原版 PDF 路由，桌面 latest 保持 `v2.0.0`。
-- App 入口在 `src/mobile/views/`，PDF 路由由 `src/mobile/services/readerRoute.ts` 经覆盖清单启用；引擎可放共享服务，但不能把 App 的入口带入桌面。
-- (历史) 当时基础／桌面版本为 2.0.0，Android／iOS 为 2.1.0，桌面固定旧基线。误建的统一 `v2.1.0` Release 已撤回为草稿，不能重新公开；2.2.0 起版本对齐，见上文分支分工。
-- K30 覆盖升级与数据保留已验证；用户明确同意注明安全锁屏导致的前台交互验收限制并继续发布，不把受阻项计为通过。
+- 为什么必须这样分：已安装的桌面更新器只读 GitHub latest（`vX.Y.Z`）；已安装的 App 更新器取版本最高、带 `_android_arm64.apk` 与 `SHA256SUMS` 的 `vX.Y.Z` / `app-vX.Y.Z`。桌面 Release 混入 APK 会被推给 App 用户，App Release 设为 latest 会被推给桌面用户。`scripts/check-release.mjs` 与 `scripts/test-platform-boundary.mjs` 强制桌面只用 `v`、App 只用 `app-v`。v2.2.0–v2.2.5 是当时统一发版的全平台 Release；`app-v2.0.0` 的 tag 与资产保留（该 APK 只识别 `app-v2.x`）。
+- Release 标题只用版本号。App 默认在线语音；K30 已将旧离线选择改为在线，测试恢复设置时不要改回离线。
 
 ## K30 真机验收（2026-10-18 用户要求）
 
 完整验收先设计测试计划与能力清单，再自顶向下逐项点击每个栏目、窗口、功能和按钮。阅读样本用《理想国》和 K30 已有书籍，不以短合成文本代替长文验收；不为节省耗时省略检查。逐项记录实际结果、证据、缺陷和受阻条件，遵循 [K30 验收约定](docs/testing/k30-ui-acceptance.md)。
-
-## App / 桌面版本边界（2026-10-22 用户更新）
-
-桌面、默认 Web/PWA 与 App 版本一致 (`package.json`、`tauri.conf.json`、`tauri.android.conf.json`、`tauri.ios.conf.json`、Cargo 同步修改，`scripts/test-platform-boundary.mjs` 校验)；界面仍按平台隔离。App 专属界面在 `src/mobile/`，通过构建平台选择，不能用窗口宽度决定产品界面。能复用的能力放共享层：桌面借鉴 App 的设计 (配色令牌、生成封面、继续阅读、论文状态筛选、Sec-MS-GEC v2 语音) 时改桌面自己的文件，不直接引用 `src/mobile/`。详见 `src/mobile/README.md`。
 
 ## 技术栈
 
@@ -34,10 +30,12 @@
 - 存储: `src/storage/` 的 `LibraryStorage` 抽象 — 桌面 `tauri.ts` (文件 + SQLite)，网页 `dexie.ts` (IndexedDB)
 - 无 UI 组件库、无 Tailwind：样式全部是手写 CSS + `src/styles/main.css` 里的设计令牌
 
-## 构建机 (2026-10-22 用户要求)
+## 构建机（2026-10-22 / 10-23 用户要求）
 
-编译、测试、打包等重活一律放 **t9 服务器** (`ssh t9`, 本机隧道 127.0.0.1:2203, 用户 jiangshu, 8 核 / 约 380 GB 空闲), 避免占用本机性能和磁盘。
-t9 的 Rust 在 `~/.cargo/bin`, 非交互 shell 不在 PATH, 远程执行先 `source ~/.cargo/env` (或 `bash -lc`)。本机只做编辑、轻量检查和 git。
+编译、测试、打包（前端构建、Rust 编译与原生测试、e2e、Android APK）一律放 **t9**（`ssh t9`，本机隧道 127.0.0.1:2203，用户 jiangshu），本机只做编辑、轻量检查和 git。
+- 非交互 SSH 先 `source ~/.cargo/env`（或 `bash -lc`）。源码同步到 `~/tokenssh-build/runs/<任务名>/`，不要同步 `node_modules`、`target`、密钥或无关草稿；Rust 缓存用 `~/tokenssh-build/cache/lightread-cargo-target`。
+- 重任务串行：`flock /tmp/heavy.lock nice -n 10 …`。桌面前端构建设 `TAURI_ENV_PLATFORM=linux`；无显示器的桌面启动与拖放验证用 `xvfb-run`（GTK 3、WebKitGTK 4.1、Xvfb 已装）。
+- Linux 产物不能代替 macOS / Windows 构建，这些仍由 CI 出包。
 
 ## 常用命令
 
@@ -107,7 +105,7 @@ BIG_TXT=… PDF_FIXTURE=… node scripts/perf.mjs   # 性能基准 (打开/翻�
 ```
 src/
   App.vue              应用壳: 侧栏 / 平板图标栏 / 手机底部标签栏, 更新按钮
-  views/               LibraryView(藏书+论文共用) ReaderView(foliate) PaperReaderView(PDF, 6.5k 行) DjvuReaderView CatalogView SettingsView
+  views/               LibraryView(藏书+论文共用) ReaderView(foliate) PaperReaderView(PDF, 7k 行) DjvuReaderView CatalogView SettingsView
   components/          BookCard TocList ToastHost PaperAgentSidebar BabeldocTaskStatus
   stores/              settings.ts (localStorage, 带 SETTINGS_VERSION 迁移) library.ts
   services/            纯函数 / 平台适配: importer, opds, arxiv, tts, ai, paperAgent*, backup, appearance …
@@ -138,7 +136,7 @@ sync-server/           轻阅账号后端 (Cloudflare Worker + D1 + R2, sync.jia
 ## 边界 / 不要做
 
 - **e2e 依赖的选择器别改语义**：`getByRole('button', { name })`（分段控件按钮不要改成 `role="radio"`），`button[title="目录"]` 等 title 文案，`.book-card` `.booklist-action` `.booklist-chip` `.sidebar-update`（收起 ≤42px、悬停 ≥108px）、`text=书架还是空的` / `这个书单还是空的` 等文案 key。改动后跑一遍 `npm run e2e`。
-- `PaperReaderView.vue` 里仍有约 70 处硬编码浅色面板；深色主题下它不是完全适配的，改动前先看那一段样式。
+- `PaperReaderView.vue` 仍有少量硬编码颜色（约 20 处十六进制色值，分布在全屏背景、页面底色、翻译对照与 BabelDOC 面板），深色主题下未完全适配；改这些面板前先看对应样式。
 - Z-Library 等需要登录/验证的来源使用外部浏览器；优先接入免登录的公开搜索与下载（2026-10-03 用户要求）。不支持 KFX（见产品设计文档），不引入组件库 / Tailwind。
 - 阅读正文主题 (`settings.reader.theme`) 与应用外观 (`settings.appearance`) 是两个设置项，不要把显式选择的正文主题绑到外观上；默认值 `auto` 例外，它经 `resolveReaderTheme()` 跟随外观在浅色/夜间间切换。
 - 不要提交 `.env*`、`.corpus`、`dist`、`src-tauri/target`。
@@ -150,17 +148,33 @@ sync-server/           轻阅账号后端 (Cloudflare Worker + D1 + R2, sync.jia
 
 ## 发版流程
 
-**T9 构建优先（2026-10-23 用户要求）**：LightRead 的编译统一放在 `ssh t9` 构建机执行，包括前端构建与 Rust 编译/原生测试；当前开发机负责编辑与轻量验证。在 T9 完成构建、校验后再按授权上传 GitHub Release，以减少 Actions 用量。平台、版本、Android 固定签名、校验清单和公开门禁保持不变；Linux 本机产物不能代替 macOS / Windows 的对应构建。本地发版先设 GitHub 仓库变量 `RELEASE_BUILD_MODE=manual`，此时推送 `v*` tag 的自动构建会跳过；显式 `workflow_dispatch` 不受影响。Android 本地构建后上传到草稿，附原有 APK 校验报告和 `.apk.build.json`（`tag`、`commit`、`sha256`），再手动运行 Release（`tag=vX.Y.Z`、`full_release=true`、`reuse_android=true`）；CI 复核本地 APK 并构建桌面平台，全部门禁通过才公开。未设置该变量时保留原来的 tag 自动构建；`reuse_android=false` 保留 CI Android 构建。v1.18.1 已由 CI 完整成功发布，无需重建或覆盖。
+通用规则：
+- 提交信息用 `release: vX.Y.Z`（桌面）或 `release: app-vX.Y.Z`（App），正文写用户可见变化、修复、验证与已知限制，作为 Release 说明。
+- 推送用 yzfly 账号（`gh auth switch -u yzfly`）。获得发版授权后才创建并推送 annotated tag；只整理发版规范的任务不推送、不发布。
+- 仓库变量 `RELEASE_BUILD_MODE=manual`：推 tag 不自动构建，由下面的 `gh workflow run` 显式触发。
+- 任一环节失败都保留草稿，修复后用同一 tag 重跑；workflow 只续建草稿，拒绝覆盖已公开版本，也不移动已有 tag。审核脚本取自本次 workflow 的固定 SHA，旧 tag 不必自带新版脚本。
 
-T9 非交互 SSH 需显式加入 `~/.cargo/bin` 到 PATH；LightRead 的 Rust 缓存使用 `~/tokenssh-build/cache/lightread-cargo-target`，源码在 `~/tokenssh-build/runs/` 下建独立目录。重任务在 T9 使用 `flock /tmp/heavy.lock nice -n 10 ...` 串行执行。不要同步本机 `node_modules`、`target`、密钥或无关草稿；桌面前端构建设置 `TAURI_ENV_PLATFORM=linux`。T9 已配置 GTK 3、WebKitGTK 4.1 与 Xvfb（2026-10-23）；无显示器的桌面启动与拖放验证可用 `xvfb-run`。
+### 桌面 `vX.Y.Z`
 
-1. 发版前检查工作区、需求清单与变更范围；同步修改 `package.json`、`package-lock.json`（顶层和根包两处）、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`（lightread 包）、`src-tauri/tauri.conf.json`。执行 `node scripts/check-release.mjs --self-test` 和 `node scripts/check-release.mjs --tag vX.Y.Z`，版本或 tag 不一致即停止。
-2. 完成相关单测、`npm run build`、阅读器/更新流程冒烟；Rust 变更执行相应原生测试。桌面分别确认 macOS arm64/x64、Windows NSIS、Linux AppImage/deb 的目标平台。CI 的 Rust 最低版本检查也必须通过。资源密集任务使用 `flock /tmp/heavy.lock nice -n 10 ...` 串行执行。
-3. Android 仍为**实验性 arm64 debug 包**，既有应用身份是 `com.yzfly.lightread.debug`；不能直接去掉 `.debug`、改用 release 构建或替换证书来“修复”覆盖升级。CI 保留 `--debug`，要求仓库 secret `ANDROID_KEYSTORE_B64` 和非秘密仓库变量 `ANDROID_CERT_SHA256`（64 位十六进制、对应同一固定证书）。密钥须兼容现有 Android debug signing 配置（别名 `androiddebugkey`，store/key password 均为 `android`），受控备份；禁止提交密钥、打印 secret 或临时生成签名兜底。缺配置必须失败。
-4. **历史签名迁移限制（2026-10-03 核实）**：此前 CI 缺少固定签名 secret，使用 runner 临时密钥。官方 v1.3.0 APK 与 v1.1.18 安装的证书不同，因此无法承诺跨这些版本覆盖升级；公开证书指纹不能恢复私钥。v1.4.0 起专用固定密钥位于 `~/.config/lightread/signing/lightread-android.jks`，本机备份位于 `~/.local/share/lightread/signing-backup/lightread-android.jks`，GitHub secret 已配置。异地备份在 R2 私有桶 `yzfly-signing-backup/lightread/lightread-android.jks`（不加密、不设额外口令，靠 Cloudflare 账号权限保护；恢复方法见同目录 README.txt，2026-10-04 用户选定）。公开证书 SHA256 为 `56103db2e518cf800db66d148d45f886e93c12b1afc8944ec668713636c7bada`。不要覆盖这两个密钥文件或复用其他项目签名。历史用户迁移按 README 的 Android 备份/恢复说明执行；不得默默卸载旧应用、清空数据或声称新固定签名可覆盖所有旧随机签名安装。
-5. **本地 Android 打包只用 `npm run android:build`**（`scripts/build-android.mjs`），不要手敲 `tauri android build`。它固定 `CARGO_PROFILE_DEV_DEBUG=0`（`--debug` 走 Cargo dev profile，默认带完整 DWARF；app-v2.1.1 首次本地打包就因此从 94MB 涨到 284MB），先 `:app:clean` 避免增量 ZIP 留下整份旧原生库的空洞，并要求固定签名。`check-release.mjs` 的 ZIP 布局与原生库校验（`.so` 不得含 `.debug_*` 段）必须通过，不能只检查包名与签名。对候选 APK 执行 `node scripts/check-release.mjs --tag vX.Y.Z --apk <APK路径> --cert <固定证书SHA256>`（`aapt`/`apksigner` 在 PATH 或通过 `AAPT`/`APKSIGNER` 指定）。校验实际包名、versionName、versionCode、仅 arm64-v8a、minSdk 24、targetSdk 36、签名证书；生成 `.apk.json` 报告与 `.apk.sha256`。API 基线升级必须显式审查并更新检查脚本。真机记录 Android API、ABI、WebView 版本；用相同固定签名的前一版本执行覆盖升级，验证藏书/阅读进度/设置保留、离线启动、导入和阅读，以及点开下载→返回应用→版本检查。签名不一致时只做经授权的数据迁移，不能以卸载重装充当覆盖升级验收。
-6. 提交信息使用 `release: vX.Y.Z`，正文写用户可见变化、修复、验证与已知限制，作为 GitHub Release 说明。按需检查 `gh auth status`，推送使用 yzfly 账号。发版工作获得授权后才创建并推送 annotated tag：`git tag -a vX.Y.Z -m "vX.Y.Z"`、`git push origin main vX.Y.Z`；只有整理发版规范的任务不执行推送/发布。
-7. `.github/workflows/release.yml` 先校验版本/tag/签名配置，再构建各平台并上传 **draft Release**。Android 失败不再忽略；APK 必须完成上述静态检查后才能上传。最终 job 下载资产核对 APK SHA256、检查平台安装包齐全，生成并回验 `SHA256SUMS` 后才公开 Release。任一环节失败保留草稿，排查并重跑；不要手动提前公开不完整草稿。
-8. 公开后核对 Release 下载链接、版本说明、APK 报告、SHA256SUMS 和各平台更新入口；记录实机验收结果与已知限制。`workflow_dispatch` 指定 `tag` 时默认仅替换该 tag 的 Android 资产并重算校验清单，不改变现有 Release 的公开状态。恢复失败草稿时可再指定 `full_release=true`，使用当前 workflow 完整构建目标 tag，全部平台通过后公开；不得移动已有 tag 或对公开版本执行完整覆盖。所有安装包从指定 tag 源码构建，保持包名/签名/版本一致。审核脚本从本次 workflow 的固定 SHA 提取并保存在 `RUNNER_TEMP`，随后检出目标 tag 审核和构建；旧 tag 无需包含新版脚本，但仍须通过当前身份、签名与版本门禁。
-9. Android CI 必须通过 `LIGHTREAD_ANDROID_KEYSTORE` 显式绑定 Gradle debug signingConfig；仅写 `~/.android/debug.keystore` 在 runner 上不保证被使用。构建前用 keytool 导出的公开证书核对固定 SHA256，构建后用 apksigner 再核对实际 APK；两者均通过才能上传。临时密钥只放 `RUNNER_TEMP`，job 结束清理。本机已用该显式配置重打 v1.4.0 并通过完整 APK 校验。
-10. **GitCode 国内镜像**：`publish` 成功后，`mirror-gitcode` job（调用 `.github/workflows/mirror-gitcode.yml` 和 `scripts/mirror-gitcode.mjs`）只读取已公开的 GitHub Release，把它同步到 GitCode，逐个回下载校验 SHA-256，最后上传 `SHA256SUMS`。未配置 secret `GITCODE_TOKEN` 时自动跳过；镜像失败不影响 GitHub Release，修好后手动运行该 workflow 补跑（`tag=vX.Y.Z`，补跑是幂等的）。不要让镜像 job 反过来成为 `publish` 的前置条件。应用内更新器只采用带 `SHA256SUMS` 的镜像版本，镜像下载必须通过校验。设置与运维见 `docs/gitcode-mirror.md`。镜像仓库是 GitCode 上的 **`langgpt/LightRead`**（GitCode 没有 yzfly 用户；应用内 `MIRROR_REPO` 与离线语音包镜像地址都指向它）。**CI 未配置 `GITCODE_TOKEN` 时，发版公开后在本机运行 `scripts/mirror-gitcode-cli.sh vX.Y.Z`**（用本机已登录的 GitCode CLI `~/.local/bin/gitcode`，幂等、逐个回下载校验、SHA256SUMS 最后上传；**GitCode 只留最新版**，镜像成功后脚本尝试删除更旧的版本，离线语音包 `tts-models` 保留；GitCode API 不支持删除 Release，删不掉的会列出来，需在网页手动删）。**GitHub 只留稳定版**（2026-10-05 用户定）：最新版 + 各小版本的最后一版，其余 Release 删除，git tag 保留。
+1. 修改上表的桌面版本文件，执行 `node scripts/check-release.mjs --self-test` 和 `node scripts/check-release.mjs --platform desktop --tag vX.Y.Z`。
+2. 在 t9 跑相关单测、`npm run build`、`npm run e2e` 及改动涉及的 e2e；Rust 变更跑对应 `cargo test`。
+3. `git tag -a vX.Y.Z -m "vX.Y.Z"`、`git push origin main vX.Y.Z`，再 `gh workflow run release.yml --ref main -f tag=vX.Y.Z`。`.github/workflows/release.yml`：preflight 校验版本与回归测试并建草稿 → macOS arm64 / x64、Windows NSIS、Linux AppImage / deb 构建上传，Rust 1.87 最低版本检查 → publish 核对安装包齐全且**不含 APK**，生成并回验 `SHA256SUMS`，公开为 latest → GitCode 镜像。
+4. 公开后核对下载链接、版本说明、`SHA256SUMS` 与桌面应用内更新。
+
+### App `app-vX.Y.Z`
+
+1. 修改 `tauri.android.conf.json` / `tauri.ios.conf.json` 的版本，执行 `node scripts/check-release.mjs --platform android --tag app-vX.Y.Z`。
+2. 在 t9 **只用 `npm run android:build`** 打包（`scripts/build-android.mjs`：固定 `CARGO_PROFILE_DEV_DEBUG=0`、先 `:app:clean`、要求固定签名；手敲 `tauri android build` 会带完整 DWARF，APK 从约 94MB 涨到 280MB+）。对产物执行 `node scripts/check-release.mjs --platform android --tag app-vX.Y.Z --apk LightRead_app-vX.Y.Z_android_arm64.apk --cert <固定证书SHA256>`（`aapt` / `apksigner` 在 PATH 或经 `AAPT` / `APKSIGNER` 指定），校验包名、versionName、versionCode、仅 arm64-v8a、minSdk 24、targetSdk 36、签名证书、ZIP 布局与 `.so` 无 `.debug_*` 段，并生成 `.apk.json` 与 `.apk.sha256`。API 基线升级必须显式审查并更新检查脚本。
+3. 手写 `LightRead_app-vX.Y.Z_android_arm64.apk.build.json`（`tag`、`commit`、`sha256`）并生成 `SHA256SUMS`；推送 tag，建 `app-vX.Y.Z` 草稿，**只**上传这五个文件（APK、`.apk.json`、`.apk.sha256`、`.apk.build.json`、`SHA256SUMS`）。再 `gh workflow run release-mobile.yml --ref main -f tag=app-vX.Y.Z`：复核源码提交、版本、身份、签名与 ZIP 布局后以 `latest=false` 公开，并镜像到 GitCode。
+4. 真机记录 Android API、ABI、WebView 版本；用相同固定签名的前一版本覆盖升级，验证藏书 / 阅读进度 / 设置保留、离线启动、导入和阅读，以及点开下载 → 返回应用 → 版本检查。
+
+### Android 身份与签名
+
+- 仍是**实验性 arm64 debug 包**，应用身份 `com.yzfly.lightread.debug`；不能去掉 `.debug`、改用 release 构建或替换证书来“修复”覆盖升级。
+- 固定密钥 `~/.config/lightread/signing/lightread-android.jks`，本机备份 `~/.local/share/lightread/signing-backup/lightread-android.jks`，异地备份 R2 私有桶 `yzfly-signing-backup/lightread/lightread-android.jks`（恢复方法见同目录 README.txt）。别名 `androiddebugkey`，store / key password 均为 `android`；GitHub secret `ANDROID_KEYSTORE_B64` 与变量 `ANDROID_CERT_SHA256` 已配置。公开证书 SHA256：`56103db2e518cf800db66d148d45f886e93c12b1afc8944ec668713636c7bada`。不要覆盖密钥文件、复用其他项目签名、提交密钥或打印 secret。
+- v1.4.0 之前的 APK 用过 CI 临时密钥，无法承诺跨这些版本覆盖升级。历史用户按 README 的 Android 备份 / 恢复说明迁移；签名不一致时只做经授权的数据迁移，不得默默卸载旧应用、清空数据，也不能用卸载重装充当覆盖升级验收。
+
+### 镜像与保留
+
+- **GitCode**（`langgpt/LightRead`，GitCode 没有 yzfly 用户；应用内 `MIRROR_REPO` 与离线语音包都指向它）：公开后由 `mirror-gitcode` job 同步，逐个回下载校验 SHA-256，`SHA256SUMS` 最后上传；更新器只采用带 `SHA256SUMS` 的镜像版本。未配置 secret `GITCODE_TOKEN` 时，在本机运行 `scripts/mirror-gitcode-cli.sh <tag>`（幂等）。每条线只留最新版：脚本删除同一条线上更旧的 Release，`tts-models` 保留；GitCode API 删不掉的会列出来，需在网页手动删。镜像失败不影响 GitHub Release，不要把镜像变成 publish 的前置条件。详见 `docs/gitcode-mirror.md`。
+- **GitHub**（2026-10-05 用户定）：每条线保留最新版与各小版本的最后一版，其余 Release 删除，git tag 保留。

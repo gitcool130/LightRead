@@ -26,13 +26,17 @@ test('App overrides reach shared imports and leave shared engines untouched', ()
   assert.equal(resolve('../storage/types',root+'/src/services/edgeTts.ts'),null)
   assert.equal(resolve('./views/ReaderView.vue',root+'/src/mobile/App.vue'),null)
 })
-// 2026-10-22 起桌面与 App 版本对齐: 同一提交、同一版本号, 统一 vX.Y.Z (App 兼容入口仍可用 app-vX.Y.Z)
-test('desktop and App release the same aligned version', () => {
+// 桌面与 App 分开发版 (2026-10-25): 桌面 vX.Y.Z, App app-vX.Y.Z, 两边版本号各自递增
+test('desktop and App release separate version lines', () => {
   const check = (...args) => execFileSync(process.execPath,['scripts/check-release.mjs',...args],{cwd:root,stdio:'pipe'}).toString()
-  const { version } = JSON.parse(readFileSync(root+'/package.json','utf8'))
-  for (const platform of ['desktop','android','ios']) assert.match(check('--platform',platform,'--tag',`v${version}`),new RegExp(version.replaceAll('.','\\.')))
-  for (const platform of ['android','ios']) assert.match(check('--platform',platform,'--tag',`app-v${version}`),new RegExp(version.replaceAll('.','\\.')))
-  assert.throws(()=>check('--tag',`app-v${version}`))
-  assert.throws(()=>check('--platform','android','--tag','v1.20.0'))
+  const json = file => JSON.parse(readFileSync(`${root}/${file}`,'utf8'))
+  const desktop = json('package.json').version
+  assert.match(check('--platform','desktop','--tag',`v${desktop}`),new RegExp(desktop.replaceAll('.','\\.')))
+  assert.throws(()=>check('--platform','desktop','--tag',`app-v${desktop}`))
+  for (const platform of ['android','ios']) {
+    const app = json(`src-tauri/tauri.${platform}.conf.json`).version
+    assert.match(check('--platform',platform,'--tag',`app-v${app}`),new RegExp(app.replaceAll('.','\\.')))
+    assert.throws(()=>check('--platform',platform,'--tag',`v${app}`))
+  }
   assert.throws(()=>check('--platform','unknown'))
 })

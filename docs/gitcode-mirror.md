@@ -32,10 +32,11 @@ GitHub Release 公开后，自动把同一版本的全部安装包同步到 GitC
 镜像仓库 `langgpt/LightRead` 已于 2026-10-05 用 GitCode CLI 创建（GitCode 上没有 yzfly 用户，账号是 langgpt），离线语音包 `tts-models` 和 v1.8.0 已同步。CI 没有配置 `GITCODE_TOKEN` 时，`mirror-gitcode` job 会跳过；此时在发版公开后，在已登录 CLI 的机器上运行：
 
 ```bash
-scripts/mirror-gitcode-cli.sh vX.Y.Z
+scripts/mirror-gitcode-cli.sh vX.Y.Z        # 桌面
+scripts/mirror-gitcode-cli.sh app-vX.Y.Z    # App
 ```
 
-脚本是幂等的：已存在且校验一致的文件会跳过。**GitCode 上只留最新版**：本版本全部上传并校验后，脚本会尝试删除比它旧的 `vX.Y.Z` Release（离线语音包 `tts-models` 保留；设 `KEEP_OLD=1` 可跳过）。GitCode API 目前不支持删除 Release（HTTP 405），脚本会列出需要手动删除的版本，到 GitCode 网页的 Releases 页面删除即可；应用内更新只看最新版，旧版本残留不影响更新。CLI 自带的 `release upload` 有 30 秒超时，传不完大文件，所以脚本用 CLI 获取预签名上传地址，再用 curl 直传。
+脚本是幂等的：已存在且校验一致的文件会跳过。**GitCode 上每条发版线只留最新版**：本版本全部上传并校验后，脚本会尝试删除同一条线上更旧的 Release（桌面 `vX.Y.Z` 与 App `app-vX.Y.Z` 分开计算；离线语音包 `tts-models` 保留；设 `KEEP_OLD=1` 可跳过）。GitCode API 目前不支持删除 Release（HTTP 405），脚本会列出需要手动删除的版本，到 GitCode 网页的 Releases 页面删除即可；应用内更新各取自己那条线的最新版，旧版本残留不影响更新。CLI 自带的 `release upload` 有 30 秒超时，传不完大文件，所以脚本用 CLI 获取预签名上传地址，再用 curl 直传。
 
 ## 负责人一次性设置（让 CI 自动镜像，可选）
 

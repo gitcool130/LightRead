@@ -102,14 +102,16 @@ if grep -qxF SHA256SUMS <<<"$existing" && [[ $(remote_sha SHA256SUMS || true) ==
 else
   upload "$WORK/assets/SHA256SUMS"
 fi
-# GitCode 上只留最新版 (2026-10-05 用户要求): 本版本完整镜像并校验后, 删除比它旧的 vX.Y.Z Release。
-# 离线语音包 tts-models 不是版本号, 保留。KEEP_OLD=1 时跳过。
-if [[ ${KEEP_OLD:-0} != 1 && $TAG =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+# GitCode 上每条发版线只留最新版: 桌面 vX.Y.Z 与 App app-vX.Y.Z 分开计算 (2026-10-25 起两条线分开发版)。
+# 本版本完整镜像并校验后, 只删除同一条线上比它旧的 Release; 离线语音包 tts-models 不是版本号, 保留。KEEP_OLD=1 时跳过。
+if [[ ${KEEP_OLD:-0} != 1 && $TAG =~ ^(app-)?v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   old=$("$GC" api "repos/$GC_REPO/releases?per_page=100" --no-interactive | python3 -c 'import sys,json,re
+cur = sys.argv[1]
+prefix = cur[:cur.index("v") + 1]
+v = lambda x: tuple(int(n) for n in x[len(prefix):].split("."))
 for r in json.load(sys.stdin):
     t = r.get("tag_name", "")
-    v = lambda x: tuple(int(n) for n in x[1:].split("."))
-    if re.fullmatch(r"v\d+\.\d+\.\d+", t) and v(t) < v(sys.argv[1]): print(t)' "$TAG")
+    if re.fullmatch(re.escape(prefix) + r"\d+\.\d+\.\d+", t) and v(t) < v(cur): print(t)' "$TAG")
   # GitCode API 不支持删除 Release (HTTP 405, 2026-10-05 实测), 删不掉时只提醒去网页删除, 不让镜像失败。
   for t in $old; do
     if "$GC" release delete "$t" -R "$GC_REPO" --yes --no-interactive >/dev/null 2>&1; then
