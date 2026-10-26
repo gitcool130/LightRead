@@ -8,6 +8,7 @@ import type {
 } from './types'
 import { BUILTIN_SOURCES, getLibraryRoot, newId } from './types'
 import { needsChunkedIpc, writeBlobInChunks } from './chunkedWrite'
+import { isUsableCoverBytes } from '../services/coverRepair'
 
 type SqlDatabase = {
   execute(sql: string, values?: unknown[]): Promise<unknown>
@@ -251,6 +252,8 @@ export class TauriStorage implements LibraryStorage {
 
   /** 写封面并插入书目行 (书籍文件已就位) */
   private async insertBook(id: string, meta: NewBookMeta, cover?: Blob) {
+    // 空 Blob (取封面失败 / 远端或备份里的空封面) 不写成封面, 否则书库标记有封面却显示不出来
+    if (!cover?.size) cover = undefined
     if (cover) {
       const [path, opts] = this.loc(this.coverPath(id))
       await this.fs.writeFile(path, new Uint8Array(await cover.arrayBuffer()), opts)
@@ -381,9 +384,21 @@ export class TauriStorage implements LibraryStorage {
   }
 
   async setCover(id: string, cover: Blob) {
+    if (!cover.size) return
     const [path, opts] = this.loc(this.coverPath(id))
     await this.fs.writeFile(path, new Uint8Array(await cover.arrayBuffer()), opts)
     await this.db.execute('UPDATE books SET has_cover = 1 WHERE id = $1', [id])
+    this.forgetCoverUrl(id)
+  }
+
+  async clearCover(id: string) {
+    await this.db.execute('UPDATE books SET has_cover = 0 WHERE id = $1', [id])
+    const [path, opts] = this.loc(this.coverPath(id))
+    await this.fs.remove(path, opts).catch(() => { /* 本来就缺失 */ })
+    this.forgetCoverUrl(id)
+  }
+
+  private forgetCoverUrl(id: string) {
     const url = this.coverUrls.get(id)
     if (url) {
       URL.revokeObjectURL(url)
@@ -453,6 +468,7 @@ export class TauriStorage implements LibraryStorage {
     try {
       const [path, opts] = this.loc(this.coverPath(id))
       const bytes = await this.fs.readFile(path, opts)
+      if (!isUsableCoverBytes(bytes)) return undefined
       const url = URL.createObjectURL(new Blob([bytes.buffer as ArrayBuffer], { type: 'image/jpeg' }))
       this.coverUrls.set(id, url)
       return url

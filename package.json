@@ -64,6 +64,8 @@
     "test:reader-tap-zone": "node --experimental-strip-types --test scripts/test-reader-tap-zone.mjs",
     "test:reading-focus": "node --experimental-strip-types --test scripts/test-reading-focus.mjs",
     "test:display-title": "node --experimental-strip-types --test scripts/test-display-title.mjs",
+    "test:cover-repair": "node --experimental-strip-types --test scripts/test-cover-repair.mjs",
+    "e2e:cover-repair": "node scripts/e2e-cover-repair.mjs",
     "test:key-words": "node --experimental-strip-types --test scripts/test-key-words.mjs",
     "test:zh-segment": "node --experimental-strip-types --test scripts/test-zh-segment.mjs",
     "e2e:sync": "node scripts/e2e-sync.mjs",

@@ -4,6 +4,7 @@ import type {
   AnnotationRec, BooklistRec, BooklistWantedRec, BookMeta, CatalogSourceRec, LibraryStorage, NewBookMeta,
 } from './types'
 import { BUILTIN_SOURCES, newId } from './types'
+import { isUsableCoverBytes } from '../services/coverRepair'
 
 interface BookRow extends BookMeta {
   /** Safari 的 IndexedDB 存 Blob 会报错, 统一存 ArrayBuffer */
@@ -88,6 +89,8 @@ export class DexieStorage implements LibraryStorage {
   }
 
   async addBook(meta: NewBookMeta, file: Blob, cover?: Blob) {
+    // 空 Blob 不算封面 (见 TauriStorage.insertBook)
+    if (!cover?.size) cover = undefined
     const id = newId()
     await this.db.books.add({
       ...meta,
@@ -132,9 +135,30 @@ export class DexieStorage implements LibraryStorage {
     if (cached) return cached
     const row = await this.db.books.get(id)
     if (!row?.cover) return undefined
-    const url = URL.createObjectURL(toBlob(row.cover, 'image/jpeg'))
+    const blob = toBlob(row.cover, 'image/jpeg')
+    if (!isUsableCoverBytes(new Uint8Array(await blob.slice(0, 16).arrayBuffer()))) return undefined
+    const url = URL.createObjectURL(blob)
     this.coverUrls.set(id, url)
     return url
+  }
+
+  async setCover(id: string, cover: Blob) {
+    if (!cover.size) return
+    await this.db.books.update(id, { hasCover: true, cover: await cover.arrayBuffer() })
+    this.forgetCoverUrl(id)
+  }
+
+  async clearCover(id: string) {
+    await this.db.books.update(id, { hasCover: false, cover: undefined })
+    this.forgetCoverUrl(id)
+  }
+
+  private forgetCoverUrl(id: string) {
+    const url = this.coverUrls.get(id)
+    if (url) {
+      URL.revokeObjectURL(url)
+      this.coverUrls.delete(id)
+    }
   }
 
   async listBooklists() {

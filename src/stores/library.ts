@@ -1,9 +1,19 @@
 import { defineStore } from 'pinia'
 import type { BooklistRec, BooklistWantedRec, BookMeta } from '../storage'
 import { getStorage, newId } from '../storage'
+import { createCoverResolver } from '../services/coverRepair'
 import { planAutoLink, planListImport, type BooklistEntry } from '../services/booklists'
 import { recordReading } from '../services/readingLog.ts'
 import { activeAgentTurn, cleanupAgentPaper, paperAgentRuntimeAvailable, stopAgentTurn } from '../services/paperAgent.ts'
+
+const resolveCover = createCoverResolver({
+  storage: {
+    getCoverUrl: async id => (await getStorage()).getCoverUrl(id),
+    setCover: async (id, cover) => (await getStorage()).setCover?.(id, cover),
+    clearCover: async id => (await getStorage()).clearCover?.(id),
+  },
+  regenerate: async book => (await import('../services/importer')).regenerateCover(book),
+})
 
 export const useLibrary = defineStore('library', {
   state: () => ({
@@ -49,12 +59,12 @@ export const useLibrary = defineStore('library', {
       this.booklists = booklists
       this.booklistWanted = groupWanted(wanted)
       this.loaded = true
-      // 封面异步补齐
+      // 封面异步补齐; 本地封面损坏 (空文件 / 缺失 / 不是图片) 时从书籍文件重新生成, 期间显示文字封面
       for (const book of this.books) {
         if (book.hasCover && !this.coverUrls[book.id]) {
-          storage.getCoverUrl(book.id).then(url => {
+          resolveCover(book).then(url => {
             if (url) this.coverUrls[book.id] = url
-          })
+          }).catch(e => console.warn('[cover]', book.id, e))
         }
       }
     },

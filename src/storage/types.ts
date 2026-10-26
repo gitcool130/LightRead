@@ -130,8 +130,10 @@ export interface LibraryStorage {
   getTextEpub?(id: string): Promise<Blob | undefined>
   /** 桌面: 原生读已入库 EPUB 的元数据与封面 (与 foliate + flattenMeta 一致); 不支持 / 失败时 undefined */
   getEpubMeta?(id: string): Promise<{ title: string; author: string; description: string; language: string; cover?: Blob } | undefined>
-  /** 补设封面 (导入后由原生缓存取封面时用) */
+  /** 补设封面 (导入后由原生缓存取封面、修复损坏封面时用); 空 Blob 不算封面, 直接忽略 */
   setCover?(id: string, cover: Blob): Promise<void>
+  /** 去掉封面 (删除封面文件并清「有封面」标记), 用于书里取不到封面时修正损坏的记录 */
+  clearCover?(id: string): Promise<void>
   /** 书籍文件的 SHA-256 (同步指纹). 桌面 / 安卓由原生层读盘计算, 书的内容不进 JS; 缺省时由同步层分块计算 */
   hashBookFile?(id: string): Promise<string>
   /**
@@ -143,7 +145,7 @@ export interface LibraryStorage {
   stageBookFromPath?(path: string): Promise<LocalFileRef>
   addBookFromStaged?(meta: NewBookMeta, staged: LocalFileRef, cover?: Blob): Promise<string>
   discardStaged?(staged: LocalFileRef): Promise<void>
-  /** 返回可直接用于 <img src> 的 URL (Object URL), 由调用方缓存, 无封面返回 undefined */
+  /** 返回可直接用于 <img src> 的 URL (Object URL), 由调用方缓存; 无封面或封面不是可显示的图片 (空文件等) 返回 undefined */
   getCoverUrl(id: string): Promise<string | undefined>
 
   listBooklists(): Promise<BooklistRec[]>

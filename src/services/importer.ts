@@ -1,4 +1,4 @@
-import { getStorage, type LocalFileRef, type NewBookMeta } from '../storage'
+import { getStorage, type BookMeta, type LocalFileRef, type NewBookMeta } from '../storage'
 import { t } from '../i18n'
 import { detectFormat, isFoliateNative, isTextLike } from './format'
 import { detectReadableFormat, looksLikeText } from './plainText'
@@ -42,30 +42,55 @@ async function extractFoliateMeta(file: File) {
 
 /** PDF 元数据与封面: PDFium (与阅读器同引擎) */
 async function extractPdfMeta(file: File) {
-  let title = ''
-  let author = ''
-  let cover: Blob | undefined
   try {
-    const { PdfiumDoc } = await import('./pdfium')
-    const doc = await PdfiumDoc.open(await file.arrayBuffer())
-    try {
-      title = doc.meta('Title')
-      author = doc.meta('Author')
-      const pg = doc.pages[0]
-      if (pg) {
-        const img = doc.render(0, 0.6)
-        const canvas = document.createElement('canvas')
-        canvas.width = img.width
-        canvas.height = img.height
-        canvas.getContext('2d')!.putImageData(img, 0, 0)
-        cover = await new Promise<Blob | undefined>(resolve =>
-          canvas.toBlob(b => resolve(b ?? undefined), 'image/jpeg', 0.8))
-      }
-    } finally {
-      doc.close()
-    }
+    return await readPdfMeta(file)
   } catch { /* 解析失败: 文件名兜底, 无封面 */ }
-  return { title, author, cover }
+  return { title: '', author: '', cover: undefined }
+}
+
+/** 解析失败时抛出, 由调用方决定兜底 */
+async function readPdfMeta(file: File) {
+  const { PdfiumDoc } = await import('./pdfium')
+  const doc = await PdfiumDoc.open(await file.arrayBuffer())
+  try {
+    const title = doc.meta('Title')
+    const author = doc.meta('Author')
+    let cover: Blob | undefined
+    if (doc.pages[0]) {
+      const img = doc.render(0, 0.6)
+      const canvas = document.createElement('canvas')
+      canvas.width = img.width
+      canvas.height = img.height
+      canvas.getContext('2d')!.putImageData(img, 0, 0)
+      cover = await new Promise<Blob | undefined>(resolve =>
+        canvas.toBlob(b => resolve(b?.size ? b : undefined), 'image/jpeg', 0.8))
+    }
+    return { title, author, cover }
+  } finally {
+    doc.close()
+  }
+}
+
+/**
+ * 从已入库的书籍文件重新取封面 (修复损坏封面用, 见 services/coverRepair.ts), 取法与导入时相同.
+ * 书里没有封面返回 undefined; 读文件 / 解析出错时抛出, 以免把暂时的失败当成「没有封面」.
+ */
+export async function regenerateCover(book: BookMeta): Promise<Blob | undefined> {
+  const storage = await getStorage()
+  if (book.format === 'epub' && storage.getEpubMeta && isTauri() && !isMobileUa()) {
+    const m = await storage.getEpubMeta(book.id)
+    if (m) return m.cover
+  }
+  if (book.format === 'cbr') {
+    const cbz = (await storage.getComicCbz?.(book.id))
+      ?? await (await import('./comic')).cbrToCbz(new File([await storage.getBookFile(book.id)], book.fileName))
+    return (await extractFoliateMeta(new File([cbz], 'cover.cbz'))).cover
+  }
+  if (book.format !== 'pdf' && book.format !== 'djvu' && !isFoliateNative(book.format)) return undefined
+  const file = new File([await storage.getBookFile(book.id)], book.fileName)
+  if (book.format === 'pdf') return (await readPdfMeta(file)).cover
+  if (book.format === 'djvu') return (await import('./djvu')).djvuCover(file)
+  return (await extractFoliateMeta(file)).cover
 }
 
 export interface ImportResult {

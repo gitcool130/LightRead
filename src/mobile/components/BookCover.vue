@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 const props = defineProps<{ title: string; author?: string; src?: string }>()
 const tone = computed(() => [...props.title].reduce((n, c) => n + (c.codePointAt(0) ?? 0), 0) % 6)
+/** 解码失败的封面地址: 改显示文字封面, 换了新地址 (修复后) 再试 */
+const broken = ref<string>()
 const vertical = computed(() => /^[\p{Script=Han}\p{Punctuation}\s]+$/u.test(props.title) && props.title.length <= 18)
 </script>
 <template>
   <div class="book-art" :class="{ vertical }" :style="{ '--cover-paper': `var(--cover-paper-${tone})`, '--cover-ink': `var(--cover-ink-${tone})` }" aria-hidden="true">
-    <img v-if="src" :src="src" alt="" loading="lazy" decoding="async" />
+    <img v-if="src && src !== broken" :src="src" alt="" loading="lazy" decoding="async" @error="broken = src" />
     <template v-else>
       <span class="art-title">{{ title }}</span>
       <svg class="art-lines" viewBox="0 0 180 100" fill="none" aria-hidden="true"><path v-for="n in 6" :key="n" :d="`M-20 ${45+n*7} Q30 ${-40+n*7} 80 ${30+n*7} T200 ${20+n*7}`" /></svg>

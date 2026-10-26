@@ -23,6 +23,9 @@ const props = defineProps<{
   compact?: boolean
 }>()
 
+/** 解码失败的封面地址: 改显示文字封面, 换了新地址 (修复后) 再试 */
+const brokenCover = ref<string>()
+
 /** 封面占位标题的断行点: 文件名式标题 (package.json / my_notes-v2) 在 . _ - / 之后换行, 不在词中间硬断 */
 const coverTitleParts = computed(() => props.book.title.replace(/([._\-/])/g, '$1\u0000').split('\u0000'))
 
@@ -158,7 +161,7 @@ function onKeydown(e: KeyboardEvent) {
       <span v-if="selectable" class="select-mark" :class="{ on: selected }" aria-hidden="true">
         <svg v-if="selected" viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M9.55 15.51 5.7 11.66a1 1 0 0 0-1.4 1.42l4.54 4.54a1 1 0 0 0 1.42 0l9.44-9.44a1 1 0 1 0-1.42-1.42l-8.73 8.75z"/></svg>
       </span>
-      <img v-if="coverUrl" :src="coverUrl" alt="" loading="lazy" decoding="async" />
+      <img v-if="coverUrl && coverUrl !== brokenCover" :src="coverUrl" alt="" loading="lazy" decoding="async" @error="brokenCover = coverUrl" />
       <div
         v-else
         class="cover-fallback"

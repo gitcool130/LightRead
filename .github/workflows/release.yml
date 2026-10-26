@@ -55,6 +55,7 @@ jobs:
           npm run test:epub-compat
           npm run test:tts
           npm run test:updater
+          npm run test:cover-repair
           node --experimental-strip-types --test scripts/test-mobile-updater.mjs scripts/test-platform-boundary.mjs
       - name: 在构建前准备 Release 草稿
         env:
