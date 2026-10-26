@@ -75,3 +75,9 @@
 - Surface：先备份封面与书库数据库，经用户同意强制结束 2.3.0（从 SSH 会话无法正常关闭；WAL 为 0 字节、数据库最后写入早于操作），用经 `SHA256SUMS` 校验的安装包 `/S` 静默安装 2.3.1，再用一次性交互计划任务在桌面会话启动（任务已删除）。
 - 结果：启动后封面由 PDF 第一页重新生成，0 字节 → 39,850 字节完整 JPEG（`ff d8 … ff d9`），内容为教材真实封面；重启后封面未被再次生成（修改时间与大小不变）。修复前后数据库逐字段比对：34 本书全部字段一致（本书 `has_cover=1`、进度 0.549 / 位置 78、阅读 330 秒、来源「教材」均不变），批注、书单条目数不变。桌面截图显示「继续阅读」卡片的真实封面。
 - 证据与回退文件在 Surface `%USERPROFILE%\lightread-backup-BUG-20261025-001\`：`pre-update\`（0 字节封面与修复前数据库）、`post-update\`（修复后封面与数据库）、`library-after.png`。
+
+### App 发版与 K30 验收（2026-10-27）
+
+- 用户发现 K30 仍显示空白封面：修复只随桌面 v2.3.1 发布，K30 仍是 App 2.2.5，同一本书的 `covers/ef2f35b5….jpg` 为 0 字节（10-23 导入）。
+- 发布 `app-v2.3.0`（`latest=false`，GitHub latest 仍为 v2.3.1）：t9 `npm run android:build`（JDK 在 `~/.local/share/tokenssh-build/jdk-17`，签名临时放入 `~/tokenssh-build/signing/` 并于打包后删除），APK SHA-256 `dca26e76…b062`，release-mobile workflow 复核通过。GitCode 镜像同样暂缓。
+- K30 `pm install -r` 覆盖安装：34 本书、本书进度 0.549 保留；封面重新生成为 39,850 字节、313×442 的 JPEG，内容为教材封面；K30 上已无 0 字节封面。安装时前台被其他应用占用，未截取书架画面。
