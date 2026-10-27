@@ -6,10 +6,10 @@
 import { computed, onMounted, ref } from 'vue'
 import { t } from '../../i18n'
 import { isTauri } from '../../storage/types'
-import { MIRROR_RELEASES_URL, RELEASES_URL, openDownload } from '../../services/updater'
+import { MIRROR_RELEASES_URL, RELEASES_URL, copyLink, openDownload } from '../../services/updater'
 import { toast } from '../../services/toast'
-import { detectPlatform, type PackageKind, type PlatformDownload, type PlatformId, type WechatGroup } from '../../services/aboutLinks'
-import { loadPlatformDownloads, loadWechatGroup } from '../../services/aboutLinksLoad'
+import { AUTHOR_WECHAT, detectPlatform, type PackageKind, type PlatformDownload, type PlatformId, type WechatGroup } from '../../services/aboutLinks'
+import { loadCommunity, loadPlatformDownloads } from '../../services/aboutLinksLoad'
 
 const PLATFORM_LABEL: Record<PlatformId, string> = {
   windows: 'Windows',
@@ -34,6 +34,7 @@ const onPhone = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
 const downloads = ref<PlatformDownload[]>([])
 const downloadsState = ref<'loading' | 'ready' | 'failed'>('loading')
 const group = ref<WechatGroup | null>(null)
+const wechatId = ref(AUTHOR_WECHAT)
 const groupState = ref<'loading' | 'ready'>('loading')
 const qrBroken = ref(false)
 
@@ -53,6 +54,11 @@ const expiresText = computed(() => {
 
 const fmtSize = (bytes: number) => (bytes > 0 ? ` · ${Math.max(1, Math.round(bytes / 1048576))} MB` : '')
 
+async function copyWechatId() {
+  if (await copyLink(wechatId.value)) toast(t('settings.communityIdCopied'), 'success')
+  else toast(t('settings.communityCopyFailed', { id: wechatId.value }), 'error')
+}
+
 async function open(url: string) {
   try {
     await openDownload(url)
@@ -62,8 +68,11 @@ async function open(url: string) {
 }
 
 onMounted(async () => {
-  void loadWechatGroup()
-    .then(g => { group.value = g })
+  void loadCommunity()
+    .then(info => {
+      group.value = info.group
+      wechatId.value = info.wechatId
+    })
     .catch(() => { group.value = null })
     .finally(() => { groupState.value = 'ready' })
   try {
@@ -112,17 +121,17 @@ onMounted(async () => {
     <section class="block" aria-labelledby="about-community-title">
       <h3 id="about-community-title" class="block-title">{{ t('settings.communityTitle') }}</h3>
       <div class="community">
-        <div class="qr" :class="{ empty: !group || qrBroken }">
+        <!-- 过期 / 取不到时不留空框, 只剩文字与「复制微信号」 -->
+        <div v-if="groupState === 'loading' || (group && !qrBroken)" class="qr">
           <span v-if="groupState === 'loading'" class="skeleton sk-qr" aria-hidden="true" />
           <img
-            v-else-if="group && !qrBroken"
+            v-else-if="group"
             :src="group.image"
             :alt="t('settings.communityQrAlt', { name: group.name })"
             width="160"
             height="160"
             @error="qrBroken = true"
           />
-          <svg v-else viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path fill="currentColor" d="M4 4h6v6H4V4zm2 2v2h2V6H6zm8-2h6v6h-6V4zm2 2v2h2V6h-2zM4 14h6v6H4v-6zm2 2v2h2v-2H6zm8-2h2v2h-2v-2zm2 2h2v2h-2v-2zm2-2h2v2h-2v-2zm-4 4h2v2h-2v-2zm4 0h2v2h-2v-2z"/></svg>
         </div>
         <div class="community-copy">
           <template v-if="group && !qrBroken">
@@ -131,7 +140,12 @@ onMounted(async () => {
             <p v-if="onPhone && isTauri()" class="hint">{{ t('settings.communityPhoneHint') }}</p>
             <p class="hint">{{ expiresText }}</p>
           </template>
-          <p v-else-if="groupState === 'ready'">{{ t('settings.communityFallback') }}</p>
+          <p v-else-if="groupState === 'ready'">{{ t('settings.communityFallback', { id: wechatId }) }}</p>
+          <!-- 加作者微信拉群: 二维码有效时作为另一种方式, 过期时是唯一入口 -->
+          <p v-if="groupState === 'ready'" class="wechat-line">
+            <span v-if="group && !qrBroken">{{ t('settings.communityWechat', { id: wechatId }) }}</span>
+            <button type="button" class="btn btn-sm copy-id" @click="copyWechatId">{{ t('settings.communityCopyId') }}</button>
+          </p>
         </div>
       </div>
     </section>
@@ -241,10 +255,6 @@ onMounted(async () => {
   background: #fff; /* 二维码需要白底才能被识别, 深色模式也保持 */
   overflow: hidden;
 }
-.qr.empty {
-  background: var(--surface-2);
-  color: var(--text-3);
-}
 .qr img {
   width: 100%;
   height: 100%;
@@ -261,6 +271,16 @@ onMounted(async () => {
   margin: 0;
   color: var(--text-2);
   font-size: var(--fs-sm, 13px);
+}
+.community-copy .wechat-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  margin-top: var(--space-2);
+}
+.copy-id {
+  flex-shrink: 0;
 }
 .group-name {
   font-weight: 600;

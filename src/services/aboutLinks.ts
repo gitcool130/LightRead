@@ -5,6 +5,7 @@
  *   各取最新一个带对应安装包的 Release。GitCode 镜像只认已上传 SHA256SUMS 的版本, 地址按固定模式拼接。
  * - 读者群: 微信群二维码 7 天过期, 不打包进应用, 由 lightread-assets 上的 community.json 指向
  *   带内容哈希的图片; 只接受该目录下的 https 图片, 过期即不显示。
+ *   另给作者微信号 (加好友后拉群), 二维码过期或取不到时仍可入群; community.json 可覆盖。
  */
 
 export type PlatformId = 'windows' | 'mac' | 'linux' | 'android'
@@ -146,4 +147,14 @@ export function parseCommunity(data: unknown, now = Date.now()): WechatGroup | n
   if (!image.startsWith(COMMUNITY_BASE) || !SAFE_NAME.test(image.slice(COMMUNITY_BASE.length))) return null
   if (!name || !Number.isFinite(expires) || expires <= now) return null
   return { name, image, expiresAt }
+}
+
+/** 作者 (云中江树) 的微信号, 加好友后拉进读者群 (2026-10-27 用户提供) */
+export const AUTHOR_WECHAT = '1796060717'
+const WECHAT_ID = /^[A-Za-z0-9_-]{5,30}$/
+
+/** community.json 里的 wechatContact.id; 缺失或格式不对时用内置的作者微信号 */
+export function parseWechatContact(data: unknown): string {
+  const id = String((data as any)?.wechatContact?.id ?? '').trim()
+  return WECHAT_ID.test(id) ? id : AUTHOR_WECHAT
 }

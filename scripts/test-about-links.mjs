@@ -6,7 +6,7 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { COMMUNITY_BASE, detectPlatform, parseCommunity, parsePlatformReleases } from '../src/services/aboutLinks.ts'
+import { AUTHOR_WECHAT, COMMUNITY_BASE, detectPlatform, parseCommunity, parsePlatformReleases, parseWechatContact } from '../src/services/aboutLinks.ts'
 
 const GH = 'https://github.com/yzfly/LightRead/releases/download/'
 const gh = (tag, names, extra = {}) => ({
@@ -96,4 +96,14 @@ test('community: valid until expiry, only images under the community directory',
   assert.equal(parseCommunity({ wechatGroup: { ...ok.wechatGroup, expiresAt: 'soon' } }, now), null)
   assert.equal(parseCommunity({ wechatGroup: { ...ok.wechatGroup, name: ' ' } }, now), null)
   assert.equal(parseCommunity(null, now), null)
+})
+
+test('author WeChat: bundled default, remote override only when well-formed', () => {
+  assert.equal(AUTHOR_WECHAT, '1796060717')
+  assert.equal(parseWechatContact(null), AUTHOR_WECHAT)
+  assert.equal(parseWechatContact({}), AUTHOR_WECHAT)
+  assert.equal(parseWechatContact({ wechatContact: { id: ' lightread_cn ' } }), 'lightread_cn')
+  for (const bad of ['', 'a b c d e', 'x', '<script>', 'https://evil.example', 'a'.repeat(40)]) {
+    assert.equal(parseWechatContact({ wechatContact: { id: bad } }), AUTHOR_WECHAT, bad)
+  }
 })

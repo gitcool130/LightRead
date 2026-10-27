@@ -4,9 +4,10 @@
  * 上传带内容哈希的图片与 community.json 到 R2 桶 lightread-assets 的 community/v1/,
  * 应用经 https://lightread-assets.jiangshu.ai/community/v1/community.json 读取 (src/services/aboutLinks.ts)。
  *
- *   node scripts/publish-community.mjs <二维码.png> --expires 2026-11-03 [--name "LightRead 读者群"] [--dry-run]
+ *   node scripts/publish-community.mjs <二维码.png> --expires 2026-11-03 [--name "LightRead 读者群"] [--wechat 1796060717] [--dry-run]
  *
  * --expires 是二维码上写的「X 月 X 日前有效」那一天 (北京时间零点起不再显示)。
+ * --wechat 是加好友拉群用的作者微信号 (默认 1796060717, 与应用内置值一致)。
  * 图片请先裁到只剩二维码 (界面显示 160px, 带标题的整图缩小后不好扫)。
  * 需要 CLOUDFLARE_API_TOKEN (可用 ~/.config/tokenssh-ai/cloudflare-workers-token)。
  */
@@ -25,10 +26,15 @@ const flag = name => {
   const i = args.indexOf(name)
   return i >= 0 ? args[i + 1] : undefined
 }
-const imageArg = args.find((a, i) => !a.startsWith('--') && !['--expires', '--name'].includes(args[i - 1]))
+const imageArg = args.find((a, i) => !a.startsWith('--') && !['--expires', '--name', '--wechat'].includes(args[i - 1]))
 const image = imageArg && resolve(imageArg)
 const expires = flag('--expires')
 const name = flag('--name') ?? 'LightRead 读者群'
+const wechat = flag('--wechat') ?? '1796060717'
+if (!/^[A-Za-z0-9_-]{5,30}$/.test(wechat)) {
+  console.error('--wechat 只能是 5–30 位字母、数字、_ 或 -')
+  process.exit(1)
+}
 const dryRun = args.includes('--dry-run')
 
 if (!image || !/^\d{4}-\d{2}-\d{2}$/.test(expires ?? '')) {
@@ -52,6 +58,7 @@ const manifest = {
   version: 1,
   updatedAt: new Date().toISOString(),
   wechatGroup: { name, image: BASE + imageKey.slice(PREFIX.length), expiresAt, sha256: hash },
+  wechatContact: { id: wechat },
 }
 const dir = mkdtempSync(join(tmpdir(), 'lightread-community-'))
 const manifestPath = join(dir, 'community.json')

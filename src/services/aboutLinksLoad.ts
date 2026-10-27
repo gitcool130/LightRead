@@ -5,8 +5,10 @@
 import { fetchRemote } from './net'
 import {
   COMMUNITY_URL,
+  AUTHOR_WECHAT,
   parseCommunity,
   parsePlatformReleases,
+  parseWechatContact,
   type PlatformDownload,
   type ReleaseListSource,
   type WechatGroup,
@@ -73,14 +75,25 @@ export async function loadPlatformDownloads(force = false): Promise<PlatformDown
   throw new Error('downloads unavailable')
 }
 
-export async function loadWechatGroup(): Promise<WechatGroup | null> {
+export interface CommunityInfo {
+  /** 微信群二维码; 已过期或取不到为 null */
+  group: WechatGroup | null
+  /** 作者微信号 (加好友拉群), 总有值 */
+  wechatId: string
+}
+
+function toCommunity(data: unknown): CommunityInfo {
+  return { group: parseCommunity(data), wechatId: parseWechatContact(data) }
+}
+
+export async function loadCommunity(): Promise<CommunityInfo> {
   const cached = readCache<unknown>(COMMUNITY_KEY)
-  if (cached && cached.at > Date.now() - COMMUNITY_TTL) return parseCommunity(cached.value)
+  if (cached && cached.at > Date.now() - COMMUNITY_TTL) return toCommunity(cached.value)
   try {
     const data = await getJson(`${COMMUNITY_URL}?t=${Math.floor(Date.now() / COMMUNITY_TTL)}`, 'application/json', 8_000)
     writeCache(COMMUNITY_KEY, data)
-    return parseCommunity(data)
+    return toCommunity(data)
   } catch {
-    return cached ? parseCommunity(cached.value) : null
+    return cached ? toCommunity(cached.value) : { group: null, wechatId: AUTHOR_WECHAT }
   }
 }
