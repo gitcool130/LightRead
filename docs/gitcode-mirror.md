@@ -36,6 +36,8 @@ scripts/mirror-gitcode-cli.sh vX.Y.Z        # 桌面
 scripts/mirror-gitcode-cli.sh app-vX.Y.Z    # App
 ```
 
+GitCode 上还没有该版本 tag 时，脚本先从本地仓库推送（本地 tag 必须与 GitHub 指向同一提交）。令牌取自 CLI 登录文件 `~/.config/gc/auth.json`，经临时 credential helper 交给 git，不打印、不写入 git 配置；`gitcode auth token` 要求交互确认，无法在脚本里使用。已有的 tag 不推送也不移动，只核对是否一致。
+
 脚本是幂等的：已存在且校验一致的文件会跳过。**GitCode 上每条发版线只留最新版**：本版本全部上传并校验后，脚本会尝试删除同一条线上更旧的 Release（桌面 `vX.Y.Z` 与 App `app-vX.Y.Z` 分开计算；离线语音包 `tts-models` 保留；设 `KEEP_OLD=1` 可跳过）。GitCode API 目前不支持删除 Release（HTTP 405），脚本会列出需要手动删除的版本，到 GitCode 网页的 Releases 页面删除即可；应用内更新各取自己那条线的最新版，旧版本残留不影响更新。CLI 自带的 `release upload` 有 30 秒超时，传不完大文件，所以脚本用 CLI 获取预签名上传地址，再用 curl 直传。
 
 ## 负责人一次性设置（让 CI 自动镜像，可选）

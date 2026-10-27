@@ -47,6 +47,16 @@ for k,v in json.load(sys.stdin)["headers"].items(): print(f"-H\n{k}: {v}")')
 # 只使用已经同步且与 GitHub 相同的 tag；不移动已有 tag。
 TARGET_REF=main
 if [[ $TAG =~ ^(app-)?v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  # GitCode 还没有这个 tag 时, 用 CLI 的登录令牌 (~/.config/gc/auth.json, 只经 credential helper 读取, 不打印)
+  # 从本地仓库推送; 本地 tag 必须与 GitHub 指向同一提交。已有 tag 不推、不移动, 由下方核对。
+  if ! git ls-remote --exit-code --tags "https://gitcode.com/$GC_REPO.git" "refs/tags/$TAG" >/dev/null 2>&1; then
+    gh_commit=$(git ls-remote --tags "https://github.com/$GH_REPO.git" "refs/tags/$TAG^{}" "refs/tags/$TAG" | sort -k2 -r | head -1 | cut -f1)
+    [[ -n $gh_commit && $(git rev-parse "refs/tags/$TAG^{commit}" 2>/dev/null) == "$gh_commit" ]] \
+      || { echo "本地 tag $TAG 不存在或与 GitHub 不一致: 先 git fetch origin tag $TAG" >&2; exit 1; }
+    echo "推送 tag $TAG 到 GitCode …"
+    git -c credential.helper= -c "credential.helper=!f() { echo username=\$(python3 -I -c 'import json,os;print(json.load(open(os.path.expanduser(\"~/.config/gc/auth.json\")))[\"hosts\"][\"gitcode.com\"][\"active_user\"])'); printf 'password='; python3 -I -c 'import json,os;h=json.load(open(os.path.expanduser(\"~/.config/gc/auth.json\")))[\"hosts\"][\"gitcode.com\"];print(h[\"users\"][h[\"active_user\"]][\"token\"])'; }; f" \
+      push "https://gitcode.com/$GC_REPO.git" "refs/tags/$TAG"
+  fi
   TARGET_REF=$(node --input-type=module - "$GH_REPO" "$GC_REPO" "$TAG" <<'JS'
 import assert from 'node:assert/strict';
 import { remoteTagCommit } from './scripts/mirror-gitcode.mjs';

@@ -79,5 +79,6 @@
 ### App 发版与 K30 验收（2026-10-27）
 
 - 用户发现 K30 仍显示空白封面：修复只随桌面 v2.3.1 发布，K30 仍是 App 2.2.5，同一本书的 `covers/ef2f35b5….jpg` 为 0 字节（10-23 导入）。
-- 发布 `app-v2.3.0`（`latest=false`，GitHub latest 仍为 v2.3.1）：t9 `npm run android:build`（JDK 在 `~/.local/share/tokenssh-build/jdk-17`，签名临时放入 `~/tokenssh-build/signing/` 并于打包后删除），APK SHA-256 `dca26e76…b062`，release-mobile workflow 复核通过。GitCode 镜像同样暂缓。
+- 发布 `app-v2.3.0`（`latest=false`，GitHub latest 仍为 v2.3.1）：t9 `npm run android:build`（JDK 在 `~/.local/share/tokenssh-build/jdk-17`，签名临时放入 `~/tokenssh-build/signing/` 并于打包后删除），APK SHA-256 `dca26e76…b062`，release-mobile workflow 复核通过。
 - K30 `pm install -r` 覆盖安装：34 本书、本书进度 0.549 保留；封面重新生成为 39,850 字节、313×442 的 JPEG，内容为教材封面；K30 上已无 0 字节封面。安装时前台被其他应用占用，未截取书架画面。
+- GitCode 镜像（用户 2026-10-27 要求补做）：用本机 GitCode CLI 的登录令牌（`~/.config/gc/auth.json`，经临时 credential helper 读取、不打印）把 `app-v2.3.0`、`v2.3.1` tag 推到 `langgpt/LightRead`，提交与 GitHub 一致；再依次运行 `scripts/mirror-gitcode-cli.sh app-v2.3.0`、`v2.3.1`，全部文件回下载校验通过，两个 `SHA256SUMS` 与 GitHub 逐字节一致。`v2.3.0` 已被 v2.3.1 取代，未镜像。GitCode API 删不掉旧 Release（app-v2.0.0–2.1.1、v1.x–v2.2.5），需要在网页手动删除。
