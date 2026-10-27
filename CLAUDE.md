@@ -177,5 +177,5 @@ sync-server/           轻阅账号后端 (Cloudflare Worker + D1 + R2, sync.jia
 
 ### 镜像与保留
 
-- **GitCode**（`langgpt/LightRead`，GitCode 没有 yzfly 用户；应用内 `MIRROR_REPO` 与离线语音包都指向它）：公开后由 `mirror-gitcode` job 同步，逐个回下载校验 SHA-256，`SHA256SUMS` 最后上传；更新器只采用带 `SHA256SUMS` 的镜像版本。未配置 secret `GITCODE_TOKEN` 时，在本机运行 `scripts/mirror-gitcode-cli.sh <tag>`（幂等）。每条线只留最新版：脚本删除同一条线上更旧的 Release，`tts-models` 保留；GitCode API 删不掉的会列出来，需在网页手动删。镜像失败不影响 GitHub Release，不要把镜像变成 publish 的前置条件。详见 `docs/gitcode-mirror.md`。
+- **GitCode**（`langgpt/LightRead`，GitCode 没有 yzfly 用户；应用内 `MIRROR_REPO` 与离线语音包都指向它）：公开后由 `mirror-gitcode` job 同步，逐个回下载校验 SHA-256，`SHA256SUMS` 最后上传；更新器只采用带 `SHA256SUMS` 的镜像版本。未配置 secret `GITCODE_TOKEN` 时（当前就是这样），release workflow 结束后**直接**在本机运行 `scripts/mirror-gitcode-cli.sh <tag>`（幂等）：本机 GitCode CLI 已登录 langgpt（`~/.config/gc/auth.json`），缺 tag 时脚本自己推送，不需要再找令牌、查 jiangshu-infra 或等 pull 镜像。每条线只留最新版：脚本删除同一条线上更旧的 Release，`tts-models` 保留；GitCode API 删不掉的会列出来，需在网页手动删。镜像失败不影响 GitHub Release，不要把镜像变成 publish 的前置条件。详见 `docs/gitcode-mirror.md`。
 - **GitHub**（2026-10-05 用户定）：每条线保留最新版与各小版本的最后一版，其余 Release 删除，git tag 保留。
