@@ -189,7 +189,8 @@ try {
   await shot(page, 'library-wanted-desktop-light')
 
   // ---- 分享: 书单文件 + 纯文本 ----
-  await page.locator('.booklist-heading').getByRole('button', { name: '分享书单' }).click()
+  await page.locator('.booklist-more').click()
+  await page.locator('.booklist-heading').getByRole('menuitem', { name: '分享书单' }).click()
   const dialog = page.getByRole('dialog', { name: `分享「${listTitle}」` })
   const json = await dialog.locator('textarea').inputValue()
   const share = JSON.parse(json)
@@ -224,7 +225,8 @@ try {
   remoteIndex = null
   const other = await newPage()
   await other.page.goto(base + '/#/library')
-  await other.page.locator('.booklist-heading').getByRole('button', { name: '导入书单' }).click()
+  await other.page.locator('.booklist-more').click()
+  await other.page.locator('.booklist-heading').getByRole('menuitem', { name: '导入书单' }).click()
   const importDialog = other.page.getByRole('dialog', { name: '导入书单' })
   await importDialog.locator('textarea').fill(json)
   await importDialog.getByText(`共 ${list.books.length + 1} 本，其中 0 本已在藏书`).waitFor()
@@ -241,7 +243,8 @@ try {
   await other.page.waitForFunction(n => document.querySelectorAll('.wanted-card').length === n, list.books.length)
   assert.equal(await otherPanel.locator('.wanted-card').filter({ hasText: 'Walden' }).count(), 0, 'imported book auto-linked')
   // 纯文本清单也能导入
-  await other.page.locator('.booklist-heading').getByRole('button', { name: '导入书单' }).click()
+  await other.page.locator('.booklist-more').click()
+  await other.page.locator('.booklist-heading').getByRole('menuitem', { name: '导入书单' }).click()
   await importDialog.locator('textarea').fill('# 聊天里的书单\n1. 《活着》— 余华\n2. 《围城》— 钱锺书（1947）')
   await importDialog.getByText('共 2 本，其中 0 本已在藏书').waitFor()
   await importDialog.getByRole('button', { name: '导入书单' }).click()

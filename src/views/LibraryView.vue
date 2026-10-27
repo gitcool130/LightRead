@@ -20,6 +20,7 @@ import { formatReadingTime } from '../composables/useReadingTimer'
 import { readerPath } from '../services/readerRoute'
 import { paperState, type PaperState } from '../services/paperState'
 import { loadDaily, localDay, onReadingLogChange } from '../services/readingLog'
+import { weekStartOf } from '../services/readingStats'
 import BookCard from '../components/BookCard.vue'
 import LibraryUploadDialog from '../components/LibraryUploadDialog.vue'
 import FolderPickDialog from '../components/FolderPickDialog.vue'
@@ -151,15 +152,26 @@ watch(() => [route.query.booklist, library.loaded] as const, ([id]) => {
 
 // 顶部「今日阅读」入口 (藏书模式), 记录变化时实时刷新
 const todaySeconds = ref(0)
+const weekSeconds = ref(0)
 let stopReadingLog: (() => void) | undefined
 async function refreshToday() {
   try {
     const daily = await loadDaily()
-    todaySeconds.value = daily[localDay()]?.seconds ?? 0
+    const today = localDay()
+    const monday = weekStartOf(today)
+    todaySeconds.value = daily[today]?.seconds ?? 0
+    weekSeconds.value = Object.entries(daily)
+      .filter(([day]) => day >= monday && day <= today)
+      .reduce((sum, [, entry]) => sum + (entry?.seconds ?? 0), 0)
   } catch {
     todaySeconds.value = 0
+    weekSeconds.value = 0
   }
 }
+/** 本周: 不足 1 小时按分钟, 否则按小时 (一位小数) */
+const weekStat = computed(() => weekSeconds.value < 3600
+  ? { value: String(Math.floor(weekSeconds.value / 60)), unit: t('library.statMinutes') }
+  : { value: (weekSeconds.value / 3600).toFixed(1).replace(/\.0$/, ''), unit: t('library.statHours') })
 const todayMinutes = computed(() => Math.floor(todaySeconds.value / 60))
 const settings = useSettings()
 const goalMinutes = computed(() => Math.max(0, Math.round(settings.dailyGoalMinutes || 0)))
@@ -699,6 +711,8 @@ const addSheet = ref(false)
 const menuBookId = ref('')
 const batchMoreSheet = ref(false)
 const booklistSheet = ref(false)
+/** 桌面书单「⋯」菜单 */
+const booklistMenu = ref(false)
 const menuBook = computed(() => library.books.find(book => book.id === menuBookId.value))
 
 /** 最近打开的书; 搜索 / 筛选 / 书单 / 选择时不显示 */
@@ -827,16 +841,16 @@ async function batchClearTags() {
     @dragover.prevent="onDragOver"
     @dragleave.self="dragging = false"
     @drop.prevent="onDrop"
-    @click="importMenu = false"
+    @click="importMenu = false; booklistMenu = false"
   >
     <header v-show="!(phone && manageMode)" class="toolbar">
       <div class="heading">
         <h1>{{ paperMode ? t('nav.papers') : t('library.title') }}</h1>
-        <span v-if="library.loaded" class="count">
+        <span v-if="library.loaded && phone" class="count">
           {{ t(paperMode ? 'library.paperCount' : 'library.bookCount', { count: kindBooks.length }) }}<template v-if="totalReadingTime && !phone"> · {{ t('library.totalReading', { time: totalReadingTime }) }}</template>
         </span>
         <router-link
-          v-if="!paperMode"
+          v-if="!paperMode && (phone || !resumeBook)"
           to="/stats"
           class="today-link hit"
           :class="{ done: todayDone }"
@@ -875,15 +889,6 @@ async function batchClearTags() {
           <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M6.7 5.3a1 1 0 0 0-1.4 1.4L10.6 12l-5.3 5.3a1 1 0 1 0 1.4 1.4l5.3-5.3 5.3 5.3a1 1 0 0 0 1.4-1.4L13.4 12l5.3-5.3a1 1 0 0 0-1.4-1.4L12 10.6 6.7 5.3z"/></svg>
         </button>
       </div>
-      <AppSelect v-if="!phone" v-model="sortBy" class="input sort" :aria-label="t('common.sortBy')">
-        <option value="recent">{{ t('library.sortRecent') }}</option>
-        <option value="added">{{ t('library.sortAdded') }}</option>
-        <option value="title">{{ t(paperMode ? 'library.sortPaperTitle' : 'library.sortTitle') }}</option>
-        <option value="author">{{ t('library.sortAuthor') }}</option>
-      </AppSelect>
-      <button v-if="kindBooks.length && !phone" class="btn" :class="{ 'btn-primary': manageMode }" :aria-pressed="manageMode" @click="toggleManage">
-        {{ manageMode ? t('common.done') : t('library.manage') }}
-      </button>
       <!-- 手机: 圆形「＋」, 添加方式在底部面板里 -->
       <button
         v-if="phone"
@@ -948,7 +953,7 @@ async function batchClearTags() {
       <input v-if="folderSupported" ref="folderInput" type="file" webkitdirectory hidden data-folder-input @change="onFolderPick" />
     </header>
     <!-- 手机端的格式说明在添加面板里 -->
-    <p v-if="!phone" class="add-books-hint">{{ paperMode ? t('library.papersEmptyHint') : t(touchPrimary ? 'library.addFormatsHintTouch' : 'library.addFormatsHint') }}<span v-if="activeBooklist"> · {{ t('library.addIntoBooklist', { name: activeBooklist.name }) }}</span></p>
+    <p v-if="!phone && activeBooklist" class="add-books-hint">{{ t('library.addIntoBooklist', { name: activeBooklist.name }) }}</p>
 
     <!-- 手机: 继续阅读 (最近打开的书) -->
     <section v-if="resumeBook" class="resume card" role="button" tabindex="0" :aria-label="`${t('library.continueReading')}: ${resumeBook.title}`" @click="openBook(resumeBook)" @keydown.enter.prevent="openBook(resumeBook)">
@@ -966,25 +971,23 @@ async function batchClearTags() {
           <span class="resume-go" aria-hidden="true">{{ t('library.continue') }}</span>
         </span>
       </div>
+      <!-- 桌面: 今日 / 本周时长并入继续阅读卡 (页头不再单独放今日入口) -->
+      <div v-if="!phone && !paperMode" class="resume-stats">
+        <router-link to="/stats" class="resume-stat" :title="t('stats.libraryTodayTitle', { m: todayMinutes })" @click.stop @keydown.enter.stop>
+          <b>{{ todayMinutes }}<small>{{ goalMinutes > 0 ? t('library.statGoalMinutes', { goal: goalMinutes }) : t('library.statMinutes') }}</small></b>
+          <span :class="{ done: todayDone }">{{ t('library.statToday') }}</span>
+        </router-link>
+        <router-link to="/stats" class="resume-stat" @click.stop @keydown.enter.stop>
+          <b>{{ weekStat.value }}<small>{{ weekStat.unit }}</small></b>
+          <span>{{ t('library.statWeek') }}</span>
+        </router-link>
+      </div>
     </section>
 
+    <!-- 书架标题行 (桌面): 左侧书单 / 论文筛选, 右侧排序与管理; 手机上 display: contents, 布局不变 -->
+    <div class="shelf-head" :class="{ desktop: !phone }">
     <!-- 书单: 一级内容分组，可与标签和搜索组合筛选; 手机上只有建过书单才出现, 操作在添加面板 / 列表标题里 -->
     <section v-if="!paperMode && (!phone || library.booklists.length)" class="booklist-section">
-      <div v-if="!phone" class="booklist-heading">
-        <span>{{ t('library.booklists') }}</span>
-        <button class="booklist-text-action hit" @click="openCreateBooklist">
-          <svg viewBox="0 0 24 24" width="13" height="13"><path fill="currentColor" d="M11 13H5a1 1 0 1 1 0-2h6V5a1 1 0 1 1 2 0v6h6a1 1 0 1 1 0 2h-6v6a1 1 0 1 1-2 0v-6z"/></svg>
-          {{ t('library.newBooklist') }}
-        </button>
-        <button
-          v-if="library.booklists.length"
-          class="booklist-text-action hit"
-          @click="openBooklistManage"
-        >{{ t('library.manageBooklists') }}</button>
-        <button v-if="activeBooklist && booklistCount(activeBooklist.id)" class="booklist-text-action hit" @click="uploadBooks(library.booklistBookIds[activeBooklist.id] ?? [])">{{ t('library.uploadBooklist') }}</button>
-        <button v-if="activeBooklist" class="booklist-text-action hit" @click="showBooklistShare = true">{{ t('booklist.share') }}</button>
-        <button class="booklist-text-action hit" @click="showBooklistImport = true">{{ t('booklist.import') }}</button>
-      </div>
       <div class="booklist-row">
         <button
           class="booklist-chip"
@@ -1006,9 +1009,32 @@ async function batchClearTags() {
           <span>{{ item.name }}</span>
           <span class="booklist-count">{{ booklistCount(item.id) }}</span>
         </button>
-        <button v-if="phone" class="booklist-add-chip" :title="t('library.newBooklist')" :aria-label="t('library.newBooklist')" @click="openCreateBooklist">
+        <button class="booklist-add-chip" :title="t('library.newBooklist')" :aria-label="t('library.newBooklist')" @click="openCreateBooklist">
           <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M11 13H5a1 1 0 1 1 0-2h6V5a1 1 0 1 1 2 0v6h6a1 1 0 1 1 0 2h-6v6a1 1 0 1 1-2 0v-6z"/></svg>
         </button>
+        <!-- 桌面: 书单的其余操作收进「⋯」 -->
+        <div v-if="!phone" class="booklist-heading" @click.stop>
+          <button
+            class="booklist-more"
+            :class="{ open: booklistMenu }"
+            :title="t('library.booklistActions')"
+            :aria-label="t('library.booklistActions')"
+            aria-haspopup="menu"
+            :aria-expanded="booklistMenu"
+            @click="booklistMenu = !booklistMenu"
+          >
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="5" cy="12" r="1.7" fill="currentColor"/><circle cx="12" cy="12" r="1.7" fill="currentColor"/><circle cx="19" cy="12" r="1.7" fill="currentColor"/></svg>
+          </button>
+          <div v-if="booklistMenu" class="booklist-menu" role="menu" @keydown.esc="booklistMenu = false">
+            <button role="menuitem" @click="booklistMenu = false; showBooklistImport = true">{{ t('booklist.import') }}</button>
+            <button v-if="library.booklists.length" role="menuitem" @click="booklistMenu = false; openBooklistManage()">{{ t('library.manageBooklists') }}</button>
+            <template v-if="activeBooklist">
+              <hr />
+              <button v-if="booklistCount(activeBooklist.id)" role="menuitem" @click="booklistMenu = false; uploadBooks(library.booklistBookIds[activeBooklist.id] ?? [])">{{ t('library.uploadBooklist') }}</button>
+              <button role="menuitem" @click="booklistMenu = false; showBooklistShare = true">{{ t('booklist.share') }}</button>
+            </template>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -1034,6 +1060,18 @@ async function batchClearTags() {
         @click="tagFilter = tagFilter === tag ? '' : tag"
       >{{ tag }}</button>
       <button v-if="allTags.length" class="paper-chip ghost" @click="openTagManage">{{ t('library.manageTags') }}</button>
+    </div>
+    <div v-if="!phone && library.loaded && kindBooks.length" class="shelf-tools">
+      <AppSelect v-model="sortBy" class="input sort" :aria-label="t('common.sortBy')">
+        <option value="recent">{{ t('library.sortRecent') }}</option>
+        <option value="added">{{ t('library.sortAdded') }}</option>
+        <option value="title">{{ t(paperMode ? 'library.sortPaperTitle' : 'library.sortTitle') }}</option>
+        <option value="author">{{ t('library.sortAuthor') }}</option>
+      </AppSelect>
+      <button class="btn btn-sm" :class="manageMode ? 'btn-primary' : 'btn-ghost'" :aria-pressed="manageMode" @click="toggleManage">
+        {{ manageMode ? t('common.done') : t('library.manage') }}
+      </button>
+    </div>
     </div>
 
     <!-- 标签筛选 -->
@@ -1231,6 +1269,8 @@ async function batchClearTags() {
         @upload="uploadBooks([book.id])"
         @convert="convertBooks([book.id])"
         @send="sendBookToDevices(book.id)"
+        @move-kind="batchMoveKind([book.id])"
+        @toggle-private="setPrivate([book.id], !book.noSync)"
       />
     </div>
 
@@ -2957,5 +2997,246 @@ async function batchClearTags() {
   height: 8px;
   margin: 6px 0;
   background: var(--bg);
+}
+
+/* ---- 桌面「书桌」布局 (2026-10-26 用户选定原型 B; 档位见 docs/design/style-convergence.md) ---- */
+.shelf-head {
+  display: contents;
+}
+@media (min-width: 721px) {
+  .add-books-hint {
+    margin: calc(-1 * var(--space-2)) 0 var(--space-4);
+    font-size: var(--fs-caption);
+  }
+  .grid {
+    grid-template-columns: repeat(auto-fill, minmax(136px, 1fr));
+    gap: var(--space-8) var(--space-6);
+  }
+  .skeleton-cover {
+    aspect-ratio: 2 / 3;
+  }
+
+  /* 继续阅读 + 今日 / 本周 */
+  .resume {
+    max-width: none;
+    align-items: center;
+    gap: var(--space-6);
+    margin: 0 0 var(--space-8);
+    padding: var(--space-6);
+    border-radius: var(--radius-lg);
+  }
+  .resume-cover {
+    width: 88px;
+  }
+  .resume-cover-title {
+    padding: 12px 10px;
+    font-size: var(--fs-small);
+  }
+  .resume-eyebrow {
+    font-size: var(--fs-caption);
+  }
+  .resume-title {
+    margin-top: var(--space-1);
+    font-size: var(--fs-title);
+    font-weight: var(--fw-semibold);
+    -webkit-line-clamp: 1;
+  }
+  .resume-author {
+    font-size: var(--fs-small);
+  }
+  .resume-foot {
+    max-width: 480px;
+    margin-top: var(--space-4);
+    padding-top: 0;
+    gap: var(--space-3);
+  }
+  .resume-pct {
+    font-size: var(--fs-small);
+  }
+  .resume-go {
+    padding: 0 var(--space-4);
+    border-radius: var(--radius-sm);
+    font-size: var(--fs-small);
+    font-weight: var(--fw-medium);
+  }
+  .resume-stats {
+    flex-shrink: 0;
+    display: flex;
+    gap: var(--space-8);
+    padding: 0 var(--space-4) 0 var(--space-8);
+    border-left: 1px solid var(--border);
+  }
+  .resume-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    text-decoration: none;
+  }
+  .resume-stat b {
+    font-size: var(--fs-display);
+    font-weight: var(--fw-semibold);
+    line-height: 1.15;
+    font-variant-numeric: tabular-nums;
+    transition: color var(--dur-fast) var(--ease);
+  }
+  .resume-stat small {
+    font-size: var(--fs-small);
+    font-weight: var(--fw-regular);
+    color: var(--text-3);
+  }
+  .resume-stat > span {
+    font-size: var(--fs-small);
+    color: var(--text-3);
+  }
+  .resume-stat > span.done {
+    color: var(--success);
+  }
+  .resume-stat:hover b {
+    color: var(--brand);
+  }
+  .resume-stat:focus-visible {
+    outline: none;
+    box-shadow: var(--ring);
+  }
+
+  /* 书架标题行: 书单像标签页, 右侧排序 / 管理 */
+  .shelf-head.desktop {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    margin-bottom: var(--space-6);
+  }
+  .shelf-head.desktop > .booklist-section,
+  .shelf-head.desktop > .paper-chips {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+  }
+  .shelf-tools {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-left: auto;
+  }
+  .booklist-section {
+    padding: 0;
+    border: none;
+    background: none;
+    box-shadow: none;
+  }
+  .booklist-row {
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-1);
+    overflow: visible;
+  }
+  .booklist-chip {
+    min-width: 0;
+    height: 32px;
+    padding: 0 var(--space-3);
+    gap: 6px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--text-2);
+    font-size: var(--fs-body);
+    font-weight: var(--fw-regular);
+  }
+  .booklist-chip svg {
+    display: none;
+  }
+  .booklist-chip:hover,
+  .booklist-chip.active:hover {
+    background: var(--surface-2);
+    color: var(--text);
+  }
+  .booklist-chip.active {
+    background: none;
+    color: var(--text);
+    font-weight: var(--fw-semibold);
+  }
+  .booklist-count {
+    min-width: 0;
+    margin-left: 0;
+    padding: 0;
+    background: none;
+    color: var(--text-3);
+    font-size: var(--fs-small);
+    font-weight: var(--fw-regular);
+  }
+  .booklist-add-chip,
+  .booklist-more {
+    width: 32px;
+    height: 32px;
+    display: grid;
+    place-items: center;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--text-3);
+  }
+  .booklist-add-chip:hover,
+  .booklist-more:hover,
+  .booklist-more.open {
+    background: var(--surface-2);
+    color: var(--text);
+  }
+  .booklist-heading {
+    position: relative;
+    display: block;
+    margin: 0;
+    font-size: inherit;
+    font-weight: inherit;
+    letter-spacing: 0;
+    text-transform: none;
+  }
+  .booklist-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    z-index: 30;
+    min-width: 168px;
+    padding: var(--space-1);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--card);
+    box-shadow: var(--shadow-3);
+  }
+  .booklist-menu button {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    min-height: 32px;
+    padding: 0 var(--space-3);
+    border: none;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--text);
+    font-size: var(--fs-body);
+    text-align: left;
+    white-space: nowrap;
+  }
+  .booklist-menu button:hover,
+  .booklist-menu button:focus-visible {
+    background: var(--surface-2);
+    outline: none;
+  }
+  .booklist-menu hr {
+    margin: var(--space-1) 0;
+    border: none;
+    border-top: 1px solid var(--border);
+  }
+  .shelf-tools .sort {
+    min-height: 32px;
+    border-color: transparent;
+    background: none;
+    color: var(--text-2);
+  }
+  .shelf-tools .sort:hover {
+    background: var(--surface-2);
+  }
 }
 </style>

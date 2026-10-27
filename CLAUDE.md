@@ -57,6 +57,7 @@ npm run test:reading-focus   # 阅读焦点: 舒适区 25%–65% / 焦点线 38%
 npm run test:reader-tap-zone # 轻点分区: 横屏左·中·右 / 竖屏上·中·下 / 自动阅读时无翻页区 (纯函数)
 npm run test:display-title   # 手机书架短书名 / 短作者: 只去末尾长营销括注, 作者取分号前第一段 (src/services/displayTitle.ts)
 npm run test:about-links      # 关于页全平台下载 (桌面 v / App app-v 各取最新, 镜像只认已校验版本) + 读者群二维码过期 (src/services/aboutLinks.ts)
+npm run check:style-tokens    # 样式档位棘轮: 裸 px 字号 / 圆角 / 阴影 / 非 400·500·600 字重只许减少; 替换一批后 node scripts/check-style-tokens.mjs --update
 node scripts/publish-community.mjs <二维码.png> --expires YYYY-MM-DD   # 换关于页微信群码 (7 天过期, 不打包): 传 R2 lightread-assets/community/v1/ 并回读校验; 先裁到只剩二维码
 npm run test:cover-repair     # 损坏封面: 空文件 / 缺失 / 非图片回退文字封面, 从书籍文件重新生成写回, 取不到清标记 (src/services/coverRepair.ts)
 npm run test:zh-segment      # 仿生阅读中文分词: 词表切分 / 歧义不上色 / ICU 回退 / 交替规则 / 速度 (<15ms/万字)
@@ -123,13 +124,14 @@ sync-server/           轻阅账号后端 (Cloudflare Worker + D1 + R2, sync.jia
 ## 约定
 
 - **能用 Rust 就用 Rust（2026-10-22 用户要求）**：文件读写、哈希、下载、格式解析等重活优先写成 `src-tauri/src/` 的原生命令，提升质量与性能；前端只做界面和编排。安卓 WebView 的 IPC 会把字节数组序列化成 JSON 数字数组，大文件不要整本经 `plugin-fs` 进出 JS（导入走 `library_file_write_chunk`，同步走 `library_file_download` / `library_file_sha256`，见 issue #14）。网页版没有原生层，保留 JS 实现作回退。哪些已原生、哪些留在 JS 及实测依据见 `docs/rust-native-audit.md`，新增候选先对照它。
+- **样式档位（2026-10-26 用户确认收敛方案，见 `docs/design/style-convergence.md`）**：新写或改动的界面只用 `--fs-caption/small/body/subtitle/title/display`、`--fw-regular/medium/semibold`、`--radius-xs/sm/(默认)/lg/pill`、`--space-*`、`--shadow-1/2/3`，不写新的裸 px；`npm run check:style-tokens` 在发版 preflight 里只许裸值减少。桌面藏书页已按用户选定的「书桌」原型（B）改版：继续阅读卡含今日 / 本周、书单像标签页、书卡只有封面 + 短书名 + 「进度 · 作者」，操作收进「⋯」菜单（菜单项保留 `.action.*` 类名并始终在 DOM 里）；其余桌面页面按方案逐页替换。
 - **样式只用语义令牌**（`--bg --card --surface-2 --text --text-2 --text-3 --border --brand --brand-light --danger --success …`），不要在组件里写裸色值。深色模式通过 `<html data-theme="dark">` 重定义令牌实现，由 `services/appearance.ts` 依据 `settings.appearance` (system/light/dark) 写入。
 - 全局类 `.segmented` 是设置页等的分段控件；阅读器工具栏各自有 scoped 的 `.seg`，不要合并。
 - 图标一律内联 SVG（`aria-hidden="true"`），不用 emoji 当图标；图标按钮必须有 `aria-label`/`title`。
 - 触屏设备不依赖 hover：`@media (hover: none)` 下提供可点的替代（如 BookCard 的「更多」按钮）。
 - 所有用户可见文案走 `t()`，中英两个字典同时加 key，放在对应分区（`// ---- 藏书 ----` 等）。
 - UI / UX 需求先从全局检索同类入口，优先统一控件与交互；不只修反馈截图里的单点。应用内选择和确认使用 `AppSelect` / `AppModal` / `askConfirm`，不新增原生 `<select>` 或 `alert` / `confirm` / `prompt`。文件选择、权限和安装器属于系统能力。
-- 全局排查不等于扩大改版范围。替换弹窗时保留所在页面原有布局与触发控件尺寸；未明确要求改版的页面不得顺带重排。藏书页手机端 (≤720px) 已按 2026-10-17 用户确认的原型改版：标题 + 今日 + 圆形「＋」/ 吸顶搜索 / 继续阅读卡 / 列表标题 (范围·排序·选择) / `BookCard compact` (封面只留进度条, 「⋯」在作者行, 长按进入选择) / 选择模式底部 4 项操作栏；添加、书卡操作、批量更多都走 `AppModal` 底部面板。论文 / 书源 / 阅读记录 / 设置的手机端 (≤720px) 按 2026-10-17 用户确认的原型改版：论文页为状态 + 标签筛选与列表行 (`services/paperState.ts`)；书源页按 2026-10-18 已确认原型修正为搜索范围选择窗口、公共书源／私人书库／个人书单分组，社区目录折叠；推荐书单按 2026-10-18 用户要求归入藏书 → 书单，放在个人书单下方，不再放在书源页；藏书的「书单」为页内列表，管理独立打开；设置页为账号卡 + 分组列表，二级页复用原分区并由 `?page=` 驱动。桌面布局保持原样，不要把手机改版带到桌面。
+- 全局排查不等于扩大改版范围。替换弹窗时保留所在页面原有布局与触发控件尺寸；未明确要求改版的页面不得顺带重排。藏书页手机端 (≤720px) 已按 2026-10-17 用户确认的原型改版：标题 + 今日 + 圆形「＋」/ 吸顶搜索 / 继续阅读卡 / 列表标题 (范围·排序·选择) / `BookCard compact` (封面只留进度条, 「⋯」在作者行, 长按进入选择) / 选择模式底部 4 项操作栏；添加、书卡操作、批量更多都走 `AppModal` 底部面板。论文 / 书源 / 阅读记录 / 设置的手机端 (≤720px) 按 2026-10-17 用户确认的原型改版：论文页为状态 + 标签筛选与列表行 (`services/paperState.ts`)；书源页按 2026-10-18 已确认原型修正为搜索范围选择窗口、公共书源／私人书库／个人书单分组，社区目录折叠；推荐书单按 2026-10-18 用户要求归入藏书 → 书单，放在个人书单下方，不再放在书源页；藏书的「书单」为页内列表，管理独立打开；设置页为账号卡 + 分组列表，二级页复用原分区并由 `?page=` 驱动。桌面布局保持原样，不要把手机改版带到桌面（桌面藏书页 2026-10-26 起按用户选定的「书桌」原型改版，见上方「样式档位」；那是桌面自己的设计，不是手机改版）。
 - 手机文案按实际宽度检查换行；超过两行的界面说明逐项审阅，优先精简或按需展开。保留关键风险信息，不截断书籍正文、用户内容和必要错误详情。
 - 横竖屏排版由 `services/adaptiveLayout.ts` + `readingViewport.ts` 统一计算，只读 `settings.readerPrefs` / `pdfPrefs` 生效值，不把自动值回写到保存设置。用户输入通过 `setReaderPreference` / `setPdfPreference` 标记显式选择（包括与默认值相同的选择）；手动项优先，旋转和窗口缩放不能覆盖。`layoutOverrides` 与偏好同步，旧存档按自定义值和修改记录迁移。
 - 新增设置项：在 `SettingsState` + `defaults` 里加字段即可（load 时自动 merge）；改历史默认值才需递增 `SETTINGS_VERSION` 并写迁移。

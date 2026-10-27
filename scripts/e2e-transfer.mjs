@@ -238,7 +238,8 @@ try {
   // 书卡片「发送到其他设备」
   await B.goto(APP + '#/library', { waitUntil: 'networkidle' })
   await B.locator('.book-card').first().hover()
-  await B.locator('.book-card').first().getByRole('button', { name: '发送到其他设备' }).click()
+  await B.locator('.book-card').first().locator('.meta-more').click()
+  await B.locator('.book-card').first().getByRole('menuitem', { name: '发送到其他设备' }).click()
   await B.locator('.toast', { hasText: '已发送到我的其他设备' }).waitFor({ timeout: 15000 })
   await A.getByRole('button', { name: '刷新' }).click()
   await A.locator('.xfer-item:not(.out)[data-kind="file"]', { hasText: BOOK_TITLE }).waitFor({ timeout: 10000 })

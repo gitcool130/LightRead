@@ -153,6 +153,7 @@ await step('新建书单并加入单本书籍', async () => {
   await page.getByRole('button', { name: /全部藏书/ }).click()
   const txtCard = page.locator('.book-card:has-text("测试小说")')
   await txtCard.hover()
+  await txtCard.locator('.meta-more').click()
   await txtCard.locator('.booklist-action').click()
   await page.locator('.booklist-picker-row:has-text("产品精读")').click()
   await page.locator('.booklist-chip:has-text("产品精读")').click()
@@ -178,7 +179,8 @@ await step('书单支持移除、批量加入与持久化', async () => {
   await page.locator('.booklist-chip:has-text("产品精读")').click()
   await page.waitForFunction(() => document.querySelectorAll('.book-card').length === 2)
 
-  await page.getByRole('button', { name: '管理书单', exact: true }).click()
+  await page.locator('.booklist-more').click()
+  await page.getByRole('menuitem', { name: '管理书单', exact: true }).click()
   await page.locator('.booklist-manage-row input').fill('产品深读')
   await page.locator('.booklist-manage-row').getByRole('button', { name: '保存', exact: true }).click()
   await page.getByRole('button', { name: '关闭', exact: true }).click()

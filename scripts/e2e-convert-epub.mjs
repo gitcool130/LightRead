@@ -215,6 +215,7 @@ async function main() {
     await step('convert AZW3 from the card menu → toast with 打开', async () => {
       const c = card(kf8.title, 'AZW3')
       await c.hover()
+      await c.locator('.meta-more').click()
       await c.locator('.action.convert').click()
       const toast = page.locator('.toast', { hasText: '已转换为 EPUB' })
       await toast.waitFor({ timeout: 60_000 })
@@ -344,6 +345,7 @@ async function main() {
       const drm = (await listBooks()).find(b => b.fileName === 'drm-protected.mobi')
       const target = card('DRM 测试书', 'MOBI')
       await target.hover()
+      await target.locator('.meta-more').click()
       await target.locator('.action.convert').click()
       await page.locator('.toast.error', { hasText: 'DRM' }).waitFor({ timeout: 30_000 })
       await page.screenshot({ path: join(SHOTS, 'convert-drm-error.png') })
