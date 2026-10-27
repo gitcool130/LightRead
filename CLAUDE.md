@@ -56,6 +56,8 @@ npm run test:reading-modes   # 阅读模式: 打字机出字节奏 / 断句 / �
 npm run test:reading-focus   # 阅读焦点: 舒适区 25%–65% / 焦点线 38% / 长句 / 手动滚动后暂停跟随 (听书跟随与跳转落点, 纯函数)
 npm run test:reader-tap-zone # 轻点分区: 横屏左·中·右 / 竖屏上·中·下 / 自动阅读时无翻页区 (纯函数)
 npm run test:display-title   # 手机书架短书名 / 短作者: 只去末尾长营销括注, 作者取分号前第一段 (src/services/displayTitle.ts)
+npm run test:about-links      # 关于页全平台下载 (桌面 v / App app-v 各取最新, 镜像只认已校验版本) + 读者群二维码过期 (src/services/aboutLinks.ts)
+node scripts/publish-community.mjs <二维码.png> --expires YYYY-MM-DD   # 换关于页微信群码 (7 天过期, 不打包): 传 R2 lightread-assets/community/v1/ 并回读校验; 先裁到只剩二维码
 npm run test:cover-repair     # 损坏封面: 空文件 / 缺失 / 非图片回退文字封面, 从书籍文件重新生成写回, 取不到清标记 (src/services/coverRepair.ts)
 npm run test:zh-segment      # 仿生阅读中文分词: 词表切分 / 歧义不上色 / ICU 回退 / 交替规则 / 速度 (<15ms/万字)
 npm run test:key-words       # 点睛重点词: 本书新词发现 / 自信息 + 关键度 + 聚集度打分 / 密度与间隔 / AI 词定位与回退 (设计见 docs/research/entropy-keyword-highlighting.md、llm-keyword-selection.md)

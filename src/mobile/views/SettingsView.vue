@@ -20,6 +20,7 @@ import { requestAutoSync, syncConfigured, syncNow, syncState, waitForSync } from
 import type { SyncResult } from '../../services/sync/types.ts'
 import { accountState, isLoggedIn } from '../../services/account.ts'
 import AccountCard from '../../components/settings/AccountCard.vue'
+import AboutLinks from '../../components/settings/AboutLinks.vue'
 import { fetchRemote } from '../../services/net.ts'
 import { toast } from '../../services/toast.ts'
 import {
@@ -1656,6 +1657,8 @@ const APPEARANCE_OPTIONS = [
           {{ t('update.installTipMain') }}{{ settings.httpProxy ? t('update.installTipProxied') : t('update.installTipNoProxy') }}{{ t('update.installTipEnd') }}
         </p>
       </div>
+
+      <AboutLinks v-if="showSection('about')" />
 
       <div class="star-callout">
         <div class="star-mark" aria-hidden="true">

@@ -56,6 +56,7 @@ jobs:
           npm run test:tts
           npm run test:updater
           npm run test:cover-repair
+          npm run test:about-links
           node --experimental-strip-types --test scripts/test-mobile-updater.mjs scripts/test-platform-boundary.mjs
       - name: 在构建前准备 Release 草稿
         env:
