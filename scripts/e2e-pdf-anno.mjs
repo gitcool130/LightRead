@@ -165,6 +165,11 @@ try {
   await page.locator('.anno-pop .btn-primary').click()
   await page.waitForTimeout(320)
   assert.equal(await page.locator('.p-note-pin').count(), 1, '写想法后页面上应出现笔记气泡')
+  const visibleFills = await page.evaluate(() =>
+    [...document.querySelectorAll('.p-hl-rect')].filter(
+      e => !e.classList.contains('p-hl-line') && getComputedStyle(e).display !== 'none',
+    ).length)
+  assert.equal(visibleFills, 0, '文本注释不应该给文字铺高亮')
   await page.locator('.p-note-pin').first().click()
   await page.waitForTimeout(260)
   assert.equal(
@@ -172,6 +177,19 @@ try {
     '这条要复核出处',
     '点气泡应打开原笔记',
   )
+
+  // 8.65 气泡颜色可改, 且落库
+  const pinColorBefore = await page
+    .locator('.p-note-pin')
+    .first()
+    .evaluate(e => getComputedStyle(e).backgroundColor)
+  await page.locator('.note-color').nth(1).click()
+  await page.waitForTimeout(220)
+  const pinColorAfter = await page
+    .locator('.p-note-pin')
+    .first()
+    .evaluate(e => getComputedStyle(e).backgroundColor)
+  assert.notEqual(pinColorAfter, pinColorBefore, '气泡颜色应该能改')
 
   // 8.7 卡片带引线, 且能拖动
   assert.equal(await page.locator('.note-leader line').count(), 1, '笔记卡片应该有一条指向文字的引线')
@@ -190,6 +208,17 @@ try {
   await page.locator('.anno-pop .btn:not(.btn-primary):not(.btn-danger)').last().click()
   await page.waitForTimeout(200)
 
+  // 8.8 蓝色气泡可拖走, 与原文之间拉一条引线
+  const pinBefore = await page.locator('.p-note-pin').first().boundingBox()
+  await page.mouse.move(pinBefore.x + 8, pinBefore.y + 8)
+  await page.mouse.down()
+  await page.mouse.move(pinBefore.x + 8 + 64, pinBefore.y + 8 + 88, { steps: 10 })
+  await page.mouse.up()
+  await page.waitForTimeout(340)
+  const pinDragged = await page.locator('.p-note-pin').first().boundingBox()
+  assert.ok(pinDragged.y - pinBefore.y > 50, '气泡应该能拖走')
+  assert.equal(await page.locator('.p-note-leaders line').count(), 1, '拖走后应拉出引线')
+
   const shot = join(tmpdir(), 'lightread-pdf-anno.png')
   await page.screenshot({ path: shot })
 
@@ -202,6 +231,13 @@ try {
   assert.match(await page.locator('.anno-text-box').first().innerText(), /论证/)
   assert.equal(await page.locator('.p-hl-rect.p-hl-line').count(), 2, '刷新后下划线与删除线也应该还在')
   assert.equal(await page.locator('.p-note-pin').count(), 1, '刷新后笔记气泡也应该还在')
+  const pinReloaded = await page.locator('.p-note-pin').first().boundingBox()
+  assert.equal(
+    await page.locator('.p-note-pin').first().evaluate(e => getComputedStyle(e).backgroundColor),
+    pinColorAfter,
+    '气泡颜色应该落库',
+  )
+  assert.ok(Math.abs(pinReloaded.y - pinDragged.y) < 6, '气泡位置应该落库, 刷新后还在原处')
 
   // 10. 笔记抽屉列出绘图批注
   await page.locator('button[title="目录"]').click()

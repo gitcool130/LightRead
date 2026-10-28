@@ -1603,12 +1603,27 @@ const vp = ref({ w: window.innerWidth, h: window.innerHeight })
 const encodeLoc = (page: number, rects: HlRect[]) =>
   `p:${page}:${JSON.stringify(rects.map(r => [r.x, r.y, r.w, r.h].map(v => +v.toFixed(2))))}`
 
-function decodeLoc(cfi: string): { page: number; rects: HlRect[] } | null {
-  const m = /^p:(\d+):(.+)$/.exec(cfi)
+function decodeLoc(
+  cfi: string,
+): { page: number; rects: HlRect[]; off?: { x: number; y: number } } | null {
+  const m = /^p:(\d+):([\s\S]+)$/.exec(cfi)
   if (!m) return null
+  let body = m[2]
+  let off: { x: number; y: number } | undefined
+  // 文本注释的气泡可以拖走, 偏移记在 `#dx,dy` 尾巴上 (老的 cfi 没有这段)
+  const hash = body.lastIndexOf('#')
+  if (hash > 0) {
+    const tail = body.slice(hash + 1)
+    const om = /^(-?[\d.]+),(-?[\d.]+)$/.exec(tail)
+    if (om) {
+      off = { x: Number(om[1]), y: Number(om[2]) }
+      body = body.slice(0, hash)
+    }
+  }
   try {
-    const arr = JSON.parse(m[2]) as number[][]
-    return { page: parseInt(m[1], 10), rects: arr.map(([x, y, w, h]) => ({ x, y, w, h })) }
+    const arr = JSON.parse(body) as number[][]
+    const rects = arr.map(([x, y, w, h]) => ({ x, y, w, h }))
+    return off ? { page: parseInt(m[1], 10), rects, off } : { page: parseInt(m[1], 10), rects }
   } catch {
     return null
   }
@@ -1633,7 +1648,7 @@ const pageHls = computed(() => {
 const pageNotes = computed(() => {
   const map = new Map<number, Array<{ a: AnnotationRec; r: HlRect; key: string }>>()
   for (const a of highlights.value) {
-    if (!a.note?.trim()) continue
+    if (a.kind !== 'note' && !a.note?.trim()) continue
     const loc = decodeLoc(a.cfi)
     const last = loc?.rects[loc.rects.length - 1]
     if (!loc || !last) continue
@@ -1644,12 +1659,132 @@ const pageNotes = computed(() => {
   return map
 })
 
-const notePinStyle = (page: number, r: HlRect) => {
-  const display = displaySizeOf(page)
+/** 文本注释气泡的配色 (实色, 比高亮的半透明色更醒目) */
+const NOTE_COLORS: Record<string, string> = {
+  blue: '#2563eb',
+  red: '#e5484d',
+  green: '#12a150',
+  orange: '#f76b15',
+  purple: '#7c5cff',
+  gray: '#4b5563',
+}
+
+const noteColorOf = (a: AnnotationRec) => {
+  const c = a.color || 'blue'
+  if (/^#/.test(c)) return c
+  return NOTE_COLORS[c] ?? NOTE_COLORS.blue
+}
+
+/** 改气泡颜色并落库 */
+async function setNoteColor(a: AnnotationRec, name: string) {
+  a.color = name
+  const storage = await getStorage()
+  await storage.updateAnnotation(a.id, { color: name })
+}
+
+/** 气泡被拖走的偏移 (页内坐标), 存在 cfi 的 `#dx,dy` 尾巴上 */
+const noteOffsets = ref<Record<string, { x: number; y: number }>>({})
+const noteOffsetOf = (a: AnnotationRec) => noteOffsets.value[a.id] ?? { x: 0, y: 0 }
+const noteMoved = (a: AnnotationRec) => {
+  const o = noteOffsetOf(a)
+  return Math.abs(o.x) > 0.5 || Math.abs(o.y) > 0.5
+}
+
+/** 文字右侧的锚点 (页内像素) */
+const noteAnchorPt = (page: number, r: HlRect) => {
+  const d = displaySizeOf(page)
+  return { x: (r.x + r.w) * d.sx, y: r.y * d.sy + 9 }
+}
+
+/** 气泡中心 (页内像素) */
+const notePinPt = (page: number, r: HlRect, a: AnnotationRec) => {
+  const d = displaySizeOf(page)
+  const off = noteOffsetOf(a)
   return {
-    left: `${(r.x + r.w) * display.sx + 3}px`,
-    top: `${r.y * display.sy - 2}px`,
+    x: (r.x + r.w) * d.sx + 11 + off.x * d.sx,
+    y: r.y * d.sy + 7 + off.y * d.sy,
   }
+}
+
+const notePinStyle = (page: number, r: HlRect, a: AnnotationRec) => {
+  const d = displaySizeOf(page)
+  const off = noteOffsetOf(a)
+  return {
+    left: `${(r.x + r.w) * d.sx + 3 + off.x * d.sx}px`,
+    top: `${r.y * d.sy - 3 + off.y * d.sy}px`,
+    background: noteColorOf(a),
+  }
+}
+
+let pinDrag: {
+  a: AnnotationRec
+  page: number
+  sx: number
+  sy: number
+  cx: number
+  cy: number
+  base: { x: number; y: number }
+} | null = null
+/** 刚刚拖动过气泡: 随后的 click 不该当成"点开笔记" */
+let pinMoved = false
+
+function startPinDrag(e: PointerEvent, a: AnnotationRec, page: number) {
+  e.preventDefault()
+  e.stopPropagation()
+  const d = displaySizeOf(page)
+  pinDrag = {
+    a,
+    page,
+    sx: e.clientX / d.sx,
+    sy: e.clientY / d.sy,
+    cx: e.clientX,
+    cy: e.clientY,
+    base: { ...noteOffsetOf(a) },
+  }
+  pinMoved = false
+  window.addEventListener('pointermove', onPinDrag)
+  window.addEventListener('pointerup', stopPinDrag)
+}
+
+function onPinDrag(e: PointerEvent) {
+  if (!pinDrag) return
+  if (Math.hypot(e.clientX - pinDrag.cx, e.clientY - pinDrag.cy) > 3) pinMoved = true
+  const d = displaySizeOf(pinDrag.page)
+  noteOffsets.value = {
+    ...noteOffsets.value,
+    [pinDrag.a.id]: {
+      x: pinDrag.base.x + (e.clientX / d.sx - pinDrag.sx),
+      y: pinDrag.base.y + (e.clientY / d.sy - pinDrag.sy),
+    },
+  }
+}
+
+async function stopPinDrag() {
+  const drag = pinDrag
+  pinDrag = null
+  window.removeEventListener('pointermove', onPinDrag)
+  window.removeEventListener('pointerup', stopPinDrag)
+  if (!drag) return
+  const off = noteOffsetOf(drag.a)
+  const cfi = withNoteOffset(drag.a.cfi, off.x, off.y)
+  if (cfi === drag.a.cfi) return
+  const storage = await getStorage()
+  await storage.updateAnnotation(drag.a.id, { cfi })
+  drag.a.cfi = cfi
+}
+
+/** 把 `#dx,dy` 写进 (或替换掉) cfi 尾巴 */
+function withNoteOffset(cfi: string, dx: number, dy: number) {
+  const base = cfi.split('#')[0]
+  return `${base}#${dx.toFixed(1)},${dy.toFixed(1)}`
+}
+
+function onPinClick(a: AnnotationRec, page: number, r: HlRect) {
+  if (pinMoved) {
+    pinMoved = false
+    return
+  }
+  openNote(a, page, r)
 }
 
 function openNote(a: AnnotationRec, page: number, r: HlRect) {
@@ -1673,6 +1808,9 @@ const markStyle = (page: number, r: HlRect, a: AnnotationRec) => {
     top: `${r.y * display.sy}px`,
     width: `${r.w * display.sx}px`,
     height: `${r.h * display.sy}px`,
+  }
+  if (a.kind === 'note') {
+    return { ...box, display: 'none' }
   }
   if (a.kind === 'underline') {
     return { ...box, background: 'none', borderBottom: `2px solid ${c}` }
@@ -2705,10 +2843,10 @@ async function addHighlight(color: string, withNote = false, kind: TextMarkKind 
   const storage = await getStorage()
   const rec: Omit<AnnotationRec, 'id'> = {
     bookId,
-    kind,
+    kind: withNote ? 'note' : kind,
+    color: withNote ? 'blue' : color,
     cfi: encodeLoc(s.page, s.rects),
     text: s.text.slice(0, 500),
-    color,
     createdAt: Date.now(),
   }
   const id = await storage.addAnnotation(rec)
@@ -4270,6 +4408,12 @@ onMounted(async () => {
     }
     const storedAnnotations = await storage.listAnnotations(bookId)
     annotations.value = storedAnnotations.filter(a => decodeLoc(a.cfi) || isDrawLoc(a.cfi))
+    const seed: Record<string, { x: number; y: number }> = {}
+    for (const a of annotations.value) {
+      const off = decodeLoc(a.cfi)?.off
+      if (off) seed[a.id] = off
+    }
+    noteOffsets.value = seed
     const blob = await storage.getBookFile(bookId)
     sourcePdfBlob = blob.slice(0, blob.size, 'application/pdf')
     const fileData = await blob.arrayBuffer()
@@ -5221,15 +5365,28 @@ onBeforeUnmount(() => {
                 <div v-for="h in pageHls.get(n) ?? []" :key="h.key" :class="['p-hl-rect', markClass(h.a)]" :style="markStyle(n, h.r, h.a)" />
               </div>
               <div v-if="pageNotes.get(n)?.length" class="p-notes">
+                <svg class="p-note-leaders" :width="displaySizeOf(n).w" :height="displaySizeOf(n).h">
+                  <template v-for="pin in pageNotes.get(n) ?? []" :key="'l' + pin.key">
+                    <line
+                      v-if="noteMoved(pin.a)"
+                      :x1="noteAnchorPt(n, pin.r).x"
+                      :y1="noteAnchorPt(n, pin.r).y"
+                      :x2="notePinPt(n, pin.r, pin.a).x"
+                      :y2="notePinPt(n, pin.r, pin.a).y"
+                    />
+                  </template>
+                </svg>
                 <button
                   v-for="pin in pageNotes.get(n) ?? []"
                   :key="pin.key"
                   type="button"
                   class="p-note-pin"
-                  :style="notePinStyle(n, pin.r)"
+                  :class="{ 'is-moved': noteMoved(pin.a) }"
+                  :style="notePinStyle(n, pin.r, pin.a)"
                   :title="pin.a.text"
                   :aria-label="t('reader.writeNote')"
-                  @click.stop="openNote(pin.a, n, pin.r)"
+                  @pointerdown="startPinDrag($event, pin.a, n)"
+                  @click.stop="onPinClick(pin.a, n, pin.r)"
                 >
                   <svg viewBox="0 0 20 20" aria-hidden="true">
                     <path d="M4.75 4h10.5v8.4H9.3l-2.9 2.4v-2.4H4.75z" />
@@ -5307,15 +5464,28 @@ onBeforeUnmount(() => {
                 <div v-for="h in pageHls.get(n) ?? []" :key="h.key" :class="['p-hl-rect', markClass(h.a)]" :style="markStyle(n, h.r, h.a)" />
               </div>
               <div v-if="pageNotes.get(n)?.length" class="p-notes">
+                <svg class="p-note-leaders" :width="displaySizeOf(n).w" :height="displaySizeOf(n).h">
+                  <template v-for="pin in pageNotes.get(n) ?? []" :key="'l' + pin.key">
+                    <line
+                      v-if="noteMoved(pin.a)"
+                      :x1="noteAnchorPt(n, pin.r).x"
+                      :y1="noteAnchorPt(n, pin.r).y"
+                      :x2="notePinPt(n, pin.r, pin.a).x"
+                      :y2="notePinPt(n, pin.r, pin.a).y"
+                    />
+                  </template>
+                </svg>
                 <button
                   v-for="pin in pageNotes.get(n) ?? []"
                   :key="pin.key"
                   type="button"
                   class="p-note-pin"
-                  :style="notePinStyle(n, pin.r)"
+                  :class="{ 'is-moved': noteMoved(pin.a) }"
+                  :style="notePinStyle(n, pin.r, pin.a)"
                   :title="pin.a.text"
                   :aria-label="t('reader.writeNote')"
-                  @click.stop="openNote(pin.a, n, pin.r)"
+                  @pointerdown="startPinDrag($event, pin.a, n)"
+                  @click.stop="onPinClick(pin.a, n, pin.r)"
                 >
                   <svg viewBox="0 0 20 20" aria-hidden="true">
                     <path d="M4.75 4h10.5v8.4H9.3l-2.9 2.4v-2.4H4.75z" />
@@ -5628,6 +5798,26 @@ onBeforeUnmount(() => {
         </button>
       </div>
       <div class="note-card-body">
+        <div class="note-colors" role="group" :aria-label="t('reader.annoColor')">
+          <button
+            v-for="(hex, name) in NOTE_COLORS"
+            :key="name"
+            type="button"
+            class="note-color"
+            :class="{ on: (activeAnnotation.color || 'blue') === name }"
+            :style="{ background: hex }"
+            :aria-label="String(name)"
+            :title="String(name)"
+            @click="setNoteColor(activeAnnotation, String(name))"
+          />
+          <label class="note-color-custom" :title="t('reader.annoColor')">
+            <input
+              type="color"
+              :value="noteColorOf(activeAnnotation)"
+              @input="setNoteColor(activeAnnotation, ($event.target as HTMLInputElement).value)"
+            />
+          </label>
+        </div>
         <p class="quote">{{ activeAnnotation.text }}</p>
         <textarea
           v-model="noteDraft"
@@ -6902,6 +7092,19 @@ onBeforeUnmount(() => {
   mix-blend-mode: multiply;
   border-radius: 1px;
 }
+/* 气泡被拖走后, 与原文之间拉一条细引线 */
+.p-note-leaders {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+.p-note-leaders line {
+  stroke: #e0b52c;
+  stroke-width: 1.2;
+  stroke-dasharray: 3 2;
+}
+
 /* 笔记气泡: 挂在末行右侧, 只有它拦截点击 */
 .p-notes {
   position: absolute;
@@ -6913,27 +7116,32 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 17px;
-  height: 17px;
+  width: 24px;
+  height: 24px;
   padding: 0;
   border: none;
-  border-radius: var(--radius-xs);
-  background: color-mix(in srgb, var(--brand) 16%, transparent);
-  color: var(--brand);
+  border-radius: var(--radius-sm);
+  background: var(--brand);
+  color: #fff;
   pointer-events: auto;
-  cursor: pointer;
-  transform: translate(-2px, -1px);
+  cursor: grab;
+  box-shadow: var(--shadow-1);
+  transform: translate(-3px, -2px);
+  transition: transform 0.12s ease;
+}
+.p-note-pin:active {
+  cursor: grabbing;
 }
 .p-note-pin svg {
-  width: 13px;
-  height: 13px;
+  width: 16px;
+  height: 16px;
   fill: none;
   stroke: currentColor;
-  stroke-width: 1.7;
+  stroke-width: 1.8;
   stroke-linejoin: round;
 }
 .p-note-pin:hover {
-  background: color-mix(in srgb, var(--brand) 26%, transparent);
+  transform: translate(-3px, -2px) scale(1.08);
 }
 
 /* 下划线 / 删除线: 实色线条, 不透明度与混合模式回到普通 */
@@ -7686,6 +7894,39 @@ onBeforeUnmount(() => {
   stroke: currentColor;
   stroke-width: 1.8;
   stroke-linecap: round;
+}
+.note-colors {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.note-color {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  box-shadow: 0 0 0 1px color-mix(in srgb, #000 12%, transparent);
+}
+.note-color.on {
+  box-shadow: 0 0 0 2px #fff, 0 0 0 3.5px color-mix(in srgb, #000 45%, transparent);
+}
+.note-color-custom {
+  position: relative;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  overflow: hidden;
+  cursor: pointer;
+  box-shadow: 0 0 0 1px color-mix(in srgb, #000 12%, transparent);
+  background: conic-gradient(#e5484d, #f76b15, #12a150, #2563eb, #7c5cff, #e5484d);
+}
+.note-color-custom input {
+  position: absolute;
+  inset: -4px;
+  opacity: 0;
+  cursor: pointer;
 }
 .note-card-body {
   display: flex;

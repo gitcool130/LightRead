@@ -38,11 +38,12 @@ export interface AnnotationRec {
   id: string
   bookId: string
   /**
-   * highlight: 划线高亮 (默认); underline: 下划线; strikeout: 删除线; bookmark: 书签;
+   * highlight: 划线高亮 (默认); underline: 下划线; strikeout: 删除线;
+   * note: 文本注释 (不铺底色, 只在文字右侧挂一个可拖动的小气泡); bookmark: 书签;
    * ink: 画笔/荧光笔笔迹, shape: 矩形/椭圆/直线/箭头, text: 页面上放下的文字框 (PDF 绘图批注).
    * 后三者的几何信息存在 cfi 里 (`a:1:...`), 见 services/pdfAnno.ts。
    */
-  kind?: 'highlight' | 'underline' | 'strikeout' | 'bookmark' | 'ink' | 'shape' | 'text'
+  kind?: 'highlight' | 'underline' | 'strikeout' | 'note' | 'bookmark' | 'ink' | 'shape' | 'text'
   /** EPUB CFI; PDF 高亮为 `p:<page>:<rects>`, PDF 绘图批注为 `a:1:<json>` */
   cfi: string
   text: string
