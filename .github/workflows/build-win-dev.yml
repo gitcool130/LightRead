@@ -60,8 +60,13 @@ jobs:
           npx vue-tsc -b
           npm run test:pdf-anno
 
-      - name: 编译 Windows 版
+      - name: 编译 Windows 版（绿色 exe + 安装包）
+        if: ${{ inputs.bundles != 'none' }}
         run: npm run tauri build -- --bundles ${{ inputs.bundles }}
+
+      - name: 编译 Windows 版（只出绿色 exe）
+        if: ${{ inputs.bundles == 'none' }}
+        run: npm run tauri build -- --no-bundle
 
       - name: 收集产物
         shell: pwsh
