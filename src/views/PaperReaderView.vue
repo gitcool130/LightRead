@@ -25,6 +25,30 @@ import {
   textRuns,
 } from '../services/pdfium'
 import { initMupdf } from '../services/mupdf'
+import {
+  ANNO_COLORS,
+  ANNO_DEFAULT_WIDTH,
+  ANNO_WIDTHS,
+  NOTE_BOX,
+  annoBounds,
+  annoFromDrag,
+  annoKindOf,
+  clampAnno,
+  clampPt,
+  decodeDraw,
+  encodeDraw,
+  hitTest,
+  inkAppend,
+  isDrawLoc,
+  isMeaningfulAnno,
+  moveAnno,
+  simplifyInk,
+  type AnnoTool,
+  type DrawAnno,
+  type NoteAnno,
+  type Pt,
+} from '../services/pdfAnno'
+import PdfAnnoLayer from '../components/PdfAnnoLayer.vue'
 import { importFile } from '../services/importer'
 import { detectFormat } from '../services/format'
 import { FONT_FAMILIES, HIGHLIGHT_COLORS, READER_THEME_CHOICES, resolveReaderColors } from '../services/readerTheme'
@@ -1583,7 +1607,7 @@ function decodeLoc(cfi: string): { page: number; rects: HlRect[] } | null {
   }
 }
 
-const highlights = computed(() => annotations.value.filter(a => a.kind !== 'bookmark'))
+const highlights = computed(() => annotations.value.filter(a => a.kind !== 'bookmark' && !isDrawLoc(a.cfi)))
 
 /** 按页索引的高亮矩形 (模板渲染用) */
 const pageHls = computed(() => {
@@ -1608,6 +1632,400 @@ const hlStyle = (page: number, r: HlRect, color: string) => {
     background: HIGHLIGHT_COLORS[color] ?? color,
   }
 }
+
+/* ================= 绘图批注: 画笔 / 荧光笔 / 矩形 / 椭圆 / 直线 / 箭头 / 文字 =================
+ * 手感与工具集借鉴 PDF-Annotator-Qt: 拖选文字高亮、自由笔迹 (含荧光笔)、形状标注、
+ * 页面上放文字框, 以及批注的选中 / 移动 / 改样式 / 删除。
+ * 几何全部是页内坐标 (缩放 1, 左上原点), 与划线高亮同一套, 缩放翻页都不用换算。
+ */
+
+/** 工具态: 'none' 表示回到普通阅读 (拖选文字划线) */
+type AnnoMode = AnnoTool | 'none'
+
+interface AnnoToolSpec {
+  id: AnnoTool
+  label: string
+  paths: string[]
+}
+
+const ANNO_TOOL_LIST: AnnoToolSpec[] = [
+  { id: 'select', label: 'reader.annoSelect', paths: ['M6 3.4l11.4 7.6-4.9 1.2 2.1 5.8-1.9.7-2.1-5.8-4.6 2.7z'] },
+  { id: 'pen', label: 'reader.annoPen', paths: ['M4.2 19.8l3.6-.8 9.6-9.7a2 2 0 0 0-2.9-2.9L5 16.2z', 'M13.4 6.4l3.1 3.1'] },
+  { id: 'marker', label: 'reader.annoMarker', paths: ['M5.4 14.6l7.9-7.9 3 3-7.9 7.9z', 'M13.3 6.7l1.9-1.9a1.5 1.5 0 0 1 2.1 0l1.4 1.4a1.5 1.5 0 0 1 0 2.1l-1.9 1.9', 'M5.4 14.6L4.4 19.6l5-1'] },
+  { id: 'rect', label: 'reader.annoRect', paths: ['M4 5.5h16v13H4z'] },
+  { id: 'ellipse', label: 'reader.annoEllipse', paths: ['M12 5c4.4 0 8 3.1 8 7s-3.6 7-8 7-8-3.1-8-7 3.6-7 8-7z'] },
+  { id: 'line', label: 'reader.annoLine', paths: ['M5 19L19 5'] },
+  { id: 'arrow', label: 'reader.annoArrow', paths: ['M5 19L19 5', 'M19 5h-5.2M19 5v5.2'] },
+  { id: 'note', label: 'reader.annoNote', paths: ['M4.5 5.5h15v13h-15z', 'M8 10h8M8 13h8M8 16h4.5'] },
+]
+
+const annoTool = ref<AnnoMode>('none')
+const annoColor = ref(ANNO_COLORS[0])
+/** 线宽按屏幕 px 调, 落到页坐标时按当前缩放折回去, 手感不随缩放漂移 */
+const annoWidthPx = ref(ANNO_DEFAULT_WIDTH.pen)
+const annoDraft = ref<DrawAnno | null>(null)
+const annoSelected = ref<{ id: string; d: DrawAnno } | null>(null)
+const annoEditingId = ref('')
+const annoEditingText = ref('')
+const annoActive = computed(() => annoTool.value !== 'none')
+
+const annoHint = computed(() => {
+  if (annoTool.value === 'select') return t('reader.annoHintSelect')
+  if (annoTool.value === 'note') return t('reader.annoHintNote')
+  return t('reader.annoHintDraw')
+})
+
+/** 已入库的绘图批注 (cfi 前缀 `a:1:`) */
+const drawAnnos = computed(() => annotations.value.flatMap(a => {
+  const d = decodeDraw(a.cfi)
+  return d ? [{ id: a.id, d }] : []
+}))
+
+const pageAnnos = computed(() => {
+  const map = new Map<number, Array<{ id: string; d: DrawAnno }>>()
+  for (const item of drawAnnos.value) {
+    const list = map.get(item.d.p) ?? []
+    list.push(item)
+    map.set(item.d.p, list)
+  }
+  return map
+})
+
+const annoPageDims = (page: number) => dimensionsOf(page)
+
+function annoWidthOf(page: number, px = annoWidthPx.value) {
+  const scale = displaySizeOf(page).sx || 1
+  return Math.max(0.4, px / scale)
+}
+
+function annoAlpha(tool: AnnoMode) {
+  return tool === 'marker' ? 0.35 : 1
+}
+
+/** 每个工具各自记住上次用的线宽 */
+const annoWidthMemory: Partial<Record<AnnoTool, number>> = {}
+
+function setAnnoTool(tool: AnnoMode) {
+  void commitAnnoText()
+  if (annoTool.value !== 'none') annoWidthMemory[annoTool.value] = annoWidthPx.value
+  annoTool.value = annoTool.value === tool ? 'none' : tool
+  const mode = annoTool.value
+  if (mode !== 'none') {
+    annoWidthPx.value = annoWidthMemory[mode] ?? (ANNO_DEFAULT_WIDTH[mode] || 2)
+  }
+  if (mode !== 'select') annoSelected.value = null
+}
+
+/** 视口坐标 → 页内坐标 */
+function annoPtOf(page: number, clientX: number, clientY: number): Pt {
+  const holder = holderOf(page)
+  const display = displaySizeOf(page)
+  const dims = dimensionsOf(page)
+  if (!holder) return { x: 0, y: 0 }
+  const hb = holder.getBoundingClientRect()
+  return clampPt((clientX - hb.left) / display.sx, (clientY - hb.top) / display.sy, dims.w, dims.h)
+}
+
+/** 屏幕 6px 在页坐标里的长度, 用作命中容差 */
+function annoTol(page: number) {
+  return 6 / Math.max(0.05, displaySizeOf(page).sx)
+}
+
+function annoHitAt(page: number, pt: Pt) {
+  const tol = annoTol(page)
+  const list = pageAnnos.value.get(page) ?? []
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (hitTest(list[i].d, pt.x, pt.y, tol)) return list[i]
+  }
+  return null
+}
+
+async function addDrawAnno(d: DrawAnno) {
+  const storage = await getStorage()
+  const rec: Omit<AnnotationRec, 'id'> = {
+    bookId,
+    kind: annoKindOf(d),
+    cfi: encodeDraw(d),
+    text: d.t === 'note' ? d.text.slice(0, 200) : '',
+    color: d.c,
+    createdAt: Date.now(),
+  }
+  const id = await storage.addAnnotation(rec)
+  annotations.value.push({ ...rec, id })
+  annoSelected.value = { id, d }
+  return id
+}
+
+async function createNoteAnno(page: number, pt: Pt) {
+  const dims = annoPageDims(page)
+  // 框比页面右/下边宽时往里收, 避免落一个跑到页外的空框
+  const w = Math.min(NOTE_BOX.w, Math.max(80, dims.w - pt.x - 8))
+  const x = Math.min(pt.x, Math.max(0, dims.w - w))
+  const y = Math.min(pt.y, Math.max(0, dims.h - NOTE_BOX.h))
+  const note: NoteAnno = {
+    t: 'note',
+    p: page,
+    x, y, w, h: NOTE_BOX.h,
+    text: '',
+    c: annoColor.value,
+    s: NOTE_BOX.s,
+  }
+  const id = await addDrawAnno(note)
+  if (!id) return
+  annoEditingId.value = id
+  annoEditingText.value = ''
+}
+
+function openAnnoText(item: { id: string; d: DrawAnno }) {
+  if (item.d.t !== 'note') return
+  annoSelected.value = { id: item.id, d: item.d }
+  annoEditingId.value = item.id
+  annoEditingText.value = item.d.text
+}
+
+const onAnnoTextInput = (value: string) => {
+  annoEditingText.value = value
+}
+
+/** 结束文字框编辑: 写入正文; 空框直接删掉 (不留空壳) */
+async function commitAnnoText() {
+  const id = annoEditingId.value
+  if (!id) return
+  annoEditingId.value = ''
+  const text = annoEditingText.value.trim()
+  annoEditingText.value = ''
+  const rec = annotations.value.find(a => a.id === id)
+  if (!rec) return
+  const d = decodeDraw(rec.cfi)
+  if (!d || d.t !== 'note') return
+  if (!text) {
+    await deleteDrawAnno(id)
+    return
+  }
+  const next: NoteAnno = { ...d, text }
+  rec.cfi = encodeDraw(next)
+  rec.text = text.slice(0, 200)
+  if (annoSelected.value?.id === id) annoSelected.value = { id, d: next }
+  const storage = await getStorage()
+  await storage.updateAnnotation(id, { cfi: rec.cfi, text: rec.text })
+}
+
+async function deleteDrawAnno(id: string) {
+  const storage = await getStorage()
+  await storage.deleteAnnotation(id)
+  annotations.value = annotations.value.filter(a => a.id !== id)
+  if (annoSelected.value?.id === id) annoSelected.value = null
+  if (annoEditingId.value === id) {
+    annoEditingId.value = ''
+    annoEditingText.value = ''
+  }
+}
+
+/** 选中态下改颜色 / 粗细: 直接落到那条批注 */
+async function restyleSelectedAnno() {
+  const sel = annoSelected.value
+  if (!sel) return
+  const d = sel.d
+  const next: DrawAnno = d.t === 'note'
+    ? { ...d, c: annoColor.value }
+    : { ...d, c: annoColor.value, w: annoWidthOf(d.p) }
+  const rec = annotations.value.find(a => a.id === sel.id)
+  if (!rec) return
+  rec.cfi = encodeDraw(next)
+  rec.color = next.c
+  annoSelected.value = { id: sel.id, d: next }
+  const storage = await getStorage()
+  await storage.updateAnnotation(sel.id, { cfi: rec.cfi, color: rec.color })
+}
+
+function pickAnnoColor(hex: string) {
+  annoColor.value = hex
+  void restyleSelectedAnno()
+}
+
+function pickAnnoWidth(px: number) {
+  annoWidthPx.value = px
+  void restyleSelectedAnno()
+}
+
+let annoDrag: {
+  page: number
+  tool: AnnoMode
+  start: Pt
+  last: Pt
+  moved: boolean
+  id?: string
+  /** 移动前的形状, 供 Esc 撤销 */
+  orig?: DrawAnno
+} | null = null
+
+function onAnnoPointerDown(e: PointerEvent, page: number) {
+  if (annoTool.value === 'none') return
+  if (e.button !== 0) return
+  e.preventDefault()
+  e.stopPropagation()
+  liveSel.value = null
+  selection.value = null
+  const pt = annoPtOf(page, e.clientX, e.clientY)
+  const tool = annoTool.value
+
+  if (tool === 'select') {
+    const hit = annoHitAt(page, pt)
+    if (!hit) {
+      annoSelected.value = null
+      void commitAnnoText()
+      return
+    }
+    if (annoEditingId.value && annoEditingId.value !== hit.id) void commitAnnoText()
+    annoSelected.value = { id: hit.id, d: hit.d }
+    annoDrag = { page, tool, start: pt, last: pt, moved: false, id: hit.id, orig: hit.d }
+    window.addEventListener('pointermove', onAnnoMove)
+    window.addEventListener('pointerup', onAnnoUp, { once: true })
+    return
+  }
+
+  if (tool === 'note') {
+    // 正在编辑就先收尾 (点空白处 = 保存), 否则在点到的位置落一个新文字框
+    if (annoEditingId.value) {
+      void commitAnnoText()
+      return
+    }
+    void createNoteAnno(page, pt)
+    return
+  }
+
+  annoDrag = { page, tool, start: pt, last: pt, moved: false }
+  annoDraft.value = annoFromDrag(tool, page, pt, pt, annoWidthOf(page), annoColor.value, annoAlpha(tool))
+  window.addEventListener('pointermove', onAnnoMove)
+  window.addEventListener('pointerup', onAnnoUp, { once: true })
+}
+
+function onAnnoMove(e: PointerEvent) {
+  const drag = annoDrag
+  if (!drag) return
+  e.preventDefault()
+  const pt = annoPtOf(drag.page, e.clientX, e.clientY)
+
+  if (drag.id) {
+    // 移动已有批注: 直接改内存里的 cfi, 松手再落库, 拖动过程实时可见
+    if (!drag.moved && Math.hypot(pt.x - drag.start.x, pt.y - drag.start.y) < 2) return
+    drag.moved = true
+    const sel = annoSelected.value
+    const rec = annotations.value.find(a => a.id === drag.id)
+    if (!sel || !rec) return
+    const dims = annoPageDims(drag.page)
+    const moved = clampAnno(moveAnno(sel.d, pt.x - drag.last.x, pt.y - drag.last.y), dims.w, dims.h)
+    drag.last = pt
+    rec.cfi = encodeDraw(moved)
+    annoSelected.value = { id: sel.id, d: moved }
+    return
+  }
+
+  const draft = annoDraft.value
+  if (!draft) return
+  drag.moved = true
+  drag.last = pt
+  if (draft.t === 'ink') {
+    annoDraft.value = inkAppend(draft, pt.x, pt.y, annoWidthOf(drag.page) * 0.35 + 0.4)
+  } else if (draft.t !== 'note') {
+    annoDraft.value = { ...draft, x2: pt.x, y2: pt.y }
+  }
+}
+
+async function onAnnoUp() {
+  window.removeEventListener('pointermove', onAnnoMove)
+  const drag = annoDrag
+  annoDrag = null
+  if (!drag) return
+
+  if (drag.id) {
+    const sel = annoSelected.value
+    if (drag.moved && sel) {
+      const storage = await getStorage()
+      await storage.updateAnnotation(sel.id, { cfi: encodeDraw(sel.d) })
+    }
+    return
+  }
+
+  const draft = annoDraft.value
+  annoDraft.value = null
+  if (!draft) return
+  if (!drag.moved) return
+  const dims = annoPageDims(drag.page)
+  const done = draft.t === 'ink'
+    ? { ...draft, pts: simplifyInk(draft.pts, annoWidthOf(drag.page) * 0.3 + 0.3) }
+    : draft
+  if (!isMeaningfulAnno(done, 3)) return
+  await addDrawAnno(clampAnno(done, dims.w, dims.h))
+}
+
+/** 取消正在进行的绘制 / 移动 (Esc) */
+function cancelAnnoDrag() {
+  window.removeEventListener('pointermove', onAnnoMove)
+  const drag = annoDrag
+  annoDrag = null
+  annoDraft.value = null
+  if (!drag?.id || !drag.moved || !drag.orig) return
+  const rec = annotations.value.find(a => a.id === drag.id)
+  if (!rec) return
+  rec.cfi = encodeDraw(drag.orig)
+  annoSelected.value = { id: drag.id, d: drag.orig }
+}
+
+function onAnnoDblClick(e: MouseEvent, page: number) {
+  if (annoTool.value === 'none') return
+  e.preventDefault()
+  e.stopPropagation()
+  if (annoTool.value !== 'select') return
+  const hit = annoHitAt(page, annoPtOf(page, e.clientX, e.clientY))
+  if (hit) openAnnoText(hit)
+}
+
+function gotoDrawAnno(item: { id: string; d: DrawAnno }) {
+  pushBack()
+  gotoPage(item.d.p, false, Math.max(0, annoBounds(item.d).y * displaySizeOf(item.d.p).sy - 120))
+  annoTool.value = 'select'
+  annoSelected.value = { id: item.id, d: item.d }
+}
+
+function annoTypeLabel(d: DrawAnno): string {
+  if (d.t === 'ink') return t(d.a < 0.9 ? 'reader.annoMarker' : 'reader.annoPen')
+  if (d.t === 'note') return t('reader.annoNote')
+  if (d.t === 'rect') return t('reader.annoRect')
+  if (d.t === 'ellipse') return t('reader.annoEllipse')
+  if (d.t === 'line') return t('reader.annoLine')
+  return t('reader.annoArrow')
+}
+
+/** Esc / Delete 优先处理批注, 其余按键交给阅读器快捷键 */
+function handleAnnoKey(e: KeyboardEvent): boolean {
+  if (e.key === 'Escape') {
+    if (annoDrag) {
+      cancelAnnoDrag()
+      return true
+    }
+    if (annoEditingId.value) {
+      void commitAnnoText()
+      return true
+    }
+    if (annoSelected.value) {
+      annoSelected.value = null
+      return true
+    }
+    if (annoTool.value !== 'none') {
+      annoTool.value = 'none'
+      return true
+    }
+    return false
+  }
+  if ((e.key === 'Delete' || e.key === 'Backspace') && annoSelected.value && !isEditableShortcutTarget(e.target)) {
+    e.preventDefault()
+    void deleteDrawAnno(annoSelected.value.id)
+    return true
+  }
+  return false
+}
+
 
 /* ---- PDF 全文搜索: PDFium 字符模型 → 命中区间 → 精确几何高亮 ---- */
 
@@ -1924,6 +2342,8 @@ function boundaryAt(page: number, clientX: number, clientY: number, clampToPage 
 
 function onScrollerPointerDown(e: PointerEvent) {
   if (!pdm) return
+  // 批注工具激活时页面被批注层接管, 不再启动文本拖选
+  if (annoTool.value !== 'none') return
   if (e.button === 1 || e.button === 2) {
     const viewport = e.currentTarget as HTMLElement | null
     if (!viewport) return
@@ -2279,6 +2699,7 @@ function liveRectStyle(page: number, r: HlRect) {
 
 /** 点击命中已有高亮 → 打开想法编辑 (高亮矩形不拦截事件, 以免影响划词) */
 function onHolderClick(e: MouseEvent, page: number) {
+  if (annoTool.value !== 'none') return
   if (suppressClick) {
     suppressClick = false
     return
@@ -3651,6 +4072,7 @@ function runPdfShortcutCommand(command: PdfReaderShortcutCommandId) {
 }
 
 function handleKeydown(e: KeyboardEvent) {
+  if (handleAnnoKey(e)) return
   dispatchPdfReaderShortcut(e, isMacPlatform, {
     state: {
       isPaper: isPaper.value,
@@ -3693,7 +4115,7 @@ onMounted(async () => {
       return
     }
     const storedAnnotations = await storage.listAnnotations(bookId)
-    annotations.value = storedAnnotations.filter(a => decodeLoc(a.cfi))
+    annotations.value = storedAnnotations.filter(a => decodeLoc(a.cfi) || isDrawLoc(a.cfi))
     const blob = await storage.getBookFile(bookId)
     sourcePdfBlob = blob.slice(0, blob.size, 'application/pdf')
     const fileData = await blob.arrayBuffer()
@@ -3786,6 +4208,8 @@ onBeforeUnmount(() => {
   thumbnailLastUsed.clear()
   window.removeEventListener('pointermove', onDragMove)
   window.removeEventListener('pointermove', onPanMove)
+  window.removeEventListener('pointermove', onAnnoMove)
+  annoDrag = null
   panDrag?.viewport.classList.remove('is-panning')
   panDrag = null
   pdm?.close()
@@ -3958,6 +4382,17 @@ onBeforeUnmount(() => {
             </button>
           </template>
           <span class="topbar-sep" aria-hidden="true" />
+          <button
+            type="button"
+            class="top-icon anno-trigger"
+            :class="{ on: annoActive }"
+            :title="t('reader.annotate')"
+            :aria-label="t('reader.annotate')"
+            :aria-pressed="annoActive"
+            @click="setAnnoTool(annoTool === 'none' ? 'pen' : 'none')"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.2 19.8l3.6-.8 9.6-9.7a2 2 0 0 0-2.9-2.9L5 16.2z" /><path d="M13.4 6.4l3.1 3.1" /></svg>
+          </button>
           <button
             type="button"
             class="top-icon"
@@ -4432,11 +4867,89 @@ onBeforeUnmount(() => {
             <button class="icon-btn anno-del" :title="t('reader.deleteHighlight')" @click.stop="removeAnnotation(a)" :aria-label="t('reader.deleteHighlight')"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M6.3 6.3a1 1 0 0 1 1.4 0L12 10.58l4.3-4.3a1 1 0 1 1 1.4 1.42L13.42 12l4.3 4.3a1 1 0 0 1-1.42 1.4L12 13.42l-4.3 4.3a1 1 0 0 1-1.4-1.42L10.58 12l-4.3-4.3a1 1 0 0 1 0-1.4z"/></svg></button>
           </div>
           <p v-if="!highlights.length" class="drawer-empty">{{ t('reader.highlightEmptyHint') }}</p>
+          <template v-if="drawAnnos.length">
+            <p class="drawer-count">{{ t('reader.annoTab') }} · {{ drawAnnos.length }}</p>
+            <div v-for="item in drawAnnos" :key="item.id" class="anno-item" @click="gotoDrawAnno(item)">
+              <span class="anno-dot" :style="{ background: item.d.c }" />
+              <div class="anno-main">
+                <p class="anno-text">{{ annoTypeLabel(item.d) }}</p>
+                <p v-if="item.d.t === 'note' && item.d.text" class="anno-note">{{ item.d.text }}</p>
+                <span class="anno-page">P{{ item.d.p }}</span>
+              </div>
+              <button class="icon-btn anno-del" :title="t('reader.annoDelete')" @click.stop="deleteDrawAnno(item.id)" :aria-label="t('reader.annoDelete')"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M6.3 6.3a1 1 0 0 1 1.4 0L12 10.58l4.3-4.3a1 1 0 1 1 1.4 1.42L13.42 12l4.3 4.3a1 1 0 0 1-1.42 1.4L12 13.42l-4.3 4.3a1 1 0 0 1-1.4-1.42L10.58 12l-4.3-4.3a1 1 0 0 1 0-1.4z"/></svg></button>
+            </div>
+          </template>
         </div>
       </aside>
 
       <!-- 左: 原文 PDF 连续滚动 (划词 / 高亮 / 链接跳转) + 底部悬浮工具条 -->
       <div class="pane-left-wrap">
+        <!-- 批注工具盘: 画笔 / 荧光笔 / 矩形 / 椭圆 / 直线 / 箭头 / 文字; 选中批注后可改色、改粗细、删除 -->
+        <section
+          v-if="annoActive"
+          class="anno-tray card"
+          role="toolbar"
+          :aria-label="t('reader.annotate')"
+        >
+          <div class="anno-tray-row" role="group">
+            <button
+              v-for="tool in ANNO_TOOL_LIST"
+              :key="tool.id"
+              type="button"
+              class="anno-tool"
+              :class="{ active: annoTool === tool.id }"
+              :title="t(tool.label)"
+              :aria-label="t(tool.label)"
+              :aria-pressed="annoTool === tool.id"
+              @click="setAnnoTool(tool.id)"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path v-for="(d, i) in tool.paths" :key="i" :d="d" /></svg>
+            </button>
+          </div>
+          <span class="anno-tray-sep" />
+          <div class="anno-tray-row anno-tray-colors" role="group" :aria-label="t('reader.annoColor')">
+            <button
+              v-for="hex in ANNO_COLORS"
+              :key="hex"
+              type="button"
+              class="anno-color"
+              :class="{ active: annoColor === hex }"
+              :style="{ background: hex }"
+              :title="hex"
+              :aria-label="hex"
+              @click="pickAnnoColor(hex)"
+            />
+          </div>
+          <template v-if="annoTool !== 'note'">
+            <span class="anno-tray-sep" />
+            <div class="anno-tray-row anno-tray-widths" role="group" :aria-label="t('reader.annoWidth')">
+              <button
+                v-for="px in ANNO_WIDTHS"
+                :key="px"
+                type="button"
+                class="anno-width"
+                :class="{ active: annoWidthPx === px }"
+                :title="`${px}px`"
+                :aria-label="`${t('reader.annoWidth')} ${px}px`"
+                @click="pickAnnoWidth(px)"
+              >
+                <span :style="{ height: `${Math.max(1, px)}px` }" />
+              </button>
+            </div>
+          </template>
+          <span class="anno-tray-sep" />
+          <button
+            v-if="annoSelected"
+            type="button"
+            class="anno-tray-del"
+            :title="t('reader.annoDelete')"
+            @click="deleteDrawAnno(annoSelected.id)"
+          >{{ t('reader.annoDelete') }}</button>
+          <span class="anno-tray-hint">{{ annoHint }}</span>
+          <button type="button" class="anno-tray-close" :aria-label="t('common.close')" :title="t('common.close')" @click="setAnnoTool('none')">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6.5 6.5 11 11M17.5 6.5l-11 11" /></svg>
+          </button>
+        </section>
         <section v-if="pdfSearchOpen" class="pdf-search card" role="search">
           <svg class="pdf-search-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M10.5 3a7.5 7.5 0 1 0 4.55 13.46l3.75 3.75a1 1 0 0 0 1.4-1.42l-3.74-3.74A7.5 7.5 0 0 0 10.5 3zM5 10.5a5.5 5.5 0 1 1 11 0 5.5 5.5 0 0 1-11 0z"/></svg>
           <input
@@ -4561,6 +5074,27 @@ onBeforeUnmount(() => {
                   :style="liveRectStyle(n, r)"
                 />
               </div>
+              <div
+                class="p-anno"
+                :class="{ live: annoActive }"
+                @pointerdown="onAnnoPointerDown($event, n)"
+                @dblclick="onAnnoDblClick($event, n)"
+              >
+                <PdfAnnoLayer
+                  :w="dimensionsOf(n).w"
+                  :h="dimensionsOf(n).h"
+                  :sx="displaySizeOf(n).sx"
+                  :sy="displaySizeOf(n).sy"
+                  :items="pageAnnos.get(n) ?? []"
+                  :draft="annoDraft && annoDraft.p === n ? annoDraft : null"
+                  :active-id="annoSelected?.id ?? ''"
+                  :editing-id="annoEditingId"
+                  :editing-text="annoEditingText"
+                  :interactive="annoActive"
+                  @text-input="onAnnoTextInput"
+                  @text-commit="commitAnnoText"
+                />
+              </div>
               <div class="p-links" />
             </div>
           </div>
@@ -4609,6 +5143,27 @@ onBeforeUnmount(() => {
                   :key="i"
                   class="p-sel-rect"
                   :style="liveRectStyle(n, r)"
+                />
+              </div>
+              <div
+                class="p-anno"
+                :class="{ live: annoActive }"
+                @pointerdown="onAnnoPointerDown($event, n)"
+                @dblclick="onAnnoDblClick($event, n)"
+              >
+                <PdfAnnoLayer
+                  :w="dimensionsOf(n).w"
+                  :h="dimensionsOf(n).h"
+                  :sx="displaySizeOf(n).sx"
+                  :sy="displaySizeOf(n).sy"
+                  :items="pageAnnos.get(n) ?? []"
+                  :draft="annoDraft && annoDraft.p === n ? annoDraft : null"
+                  :active-id="annoSelected?.id ?? ''"
+                  :editing-id="annoEditingId"
+                  :editing-text="annoEditingText"
+                  :interactive="annoActive"
+                  @text-input="onAnnoTextInput"
+                  @text-commit="commitAnnoText"
                 />
               </div>
               <div class="p-links" />
@@ -6115,6 +6670,144 @@ onBeforeUnmount(() => {
   background: rgba(64, 128, 255, 0.3);
   border-radius: 1px;
   mix-blend-mode: multiply;
+}
+/* 绘图批注层: 工具未激活时只展示, 激活后接管指针事件 */
+.p-anno {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.p-anno.live {
+  pointer-events: auto;
+}
+
+/* ---- 批注工具盘: 贴在正文左上角, 不挡划词 (只在工具激活时出现) ---- */
+.anno-tray {
+  position: absolute;
+  left: var(--space-3);
+  top: var(--space-3);
+  z-index: 46;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  max-width: calc(100% - var(--space-6));
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-lg);
+  font-size: var(--fs-small);
+  color: var(--text-2);
+}
+.anno-tray-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.anno-tray-sep {
+  width: 1px;
+  align-self: stretch;
+  margin: 2px;
+  background: var(--border);
+}
+.anno-tool {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.anno-tool svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.anno-tool:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.anno-tool.active {
+  background: var(--brand);
+  color: #fff;
+}
+.anno-color {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+}
+.anno-color.active {
+  outline: 2px solid var(--brand);
+  outline-offset: 1px;
+}
+.anno-width {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 30px;
+  padding: 0 var(--space-1);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: pointer;
+}
+.anno-width span {
+  display: block;
+  width: 100%;
+  border-radius: var(--radius-pill);
+  background: var(--text-3);
+}
+.anno-width:hover {
+  background: var(--surface-2);
+}
+.anno-width.active span {
+  background: var(--brand);
+}
+.anno-tray-del {
+  padding: 2px var(--space-2);
+  border: 1px solid color-mix(in srgb, var(--danger, #d64545) 40%, transparent);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--danger, #d64545);
+  font-size: var(--fs-small);
+  cursor: pointer;
+}
+.anno-tray-hint {
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.anno-tray-close {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.anno-tray-close:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.anno-tray-close svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
 }
 .p-holder {
   cursor: text;

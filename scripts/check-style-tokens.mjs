@@ -9,8 +9,9 @@
  */
 import { readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const ROOT = new URL('..', import.meta.url).pathname
+const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const BASELINE = join(ROOT, 'scripts/style-tokens-baseline.json')
 const SKIP = new Set(['src/vendor', 'src/styles/main.css', 'src/mobile/styles/main.css'])
 

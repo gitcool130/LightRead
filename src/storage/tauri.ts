@@ -630,6 +630,16 @@ export class TauriStorage implements LibraryStorage {
     if (patch.color !== undefined) {
       await this.db.execute('UPDATE annotations SET color = $1 WHERE id = $2', [patch.color, id])
     }
+    // 绘图批注的形状与文字都压在 cfi 里 (见 services/pdfAnno.ts): 移动 / 改样式 / 编辑文字都要能改它
+    if (patch.cfi !== undefined) {
+      await this.db.execute('UPDATE annotations SET cfi = $1 WHERE id = $2', [patch.cfi, id])
+    }
+    if (patch.text !== undefined) {
+      await this.db.execute('UPDATE annotations SET text = $1 WHERE id = $2', [patch.text, id])
+    }
+    if (patch.kind !== undefined) {
+      await this.db.execute('UPDATE annotations SET kind = $1 WHERE id = $2', [patch.kind, id])
+    }
   }
 
   async deleteAnnotation(id: string) {

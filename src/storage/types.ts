@@ -37,12 +37,16 @@ export type NewBookMeta = Omit<BookMeta, 'id' | 'hasCover'>
 export interface AnnotationRec {
   id: string
   bookId: string
-  /** highlight: 划线高亮 (默认); bookmark: 书签 */
-  kind?: 'highlight' | 'bookmark'
-  /** EPUB CFI */
+  /**
+   * highlight: 划线高亮 (默认); bookmark: 书签;
+   * ink: 画笔/荧光笔笔迹, shape: 矩形/椭圆/直线/箭头, text: 页面上放下的文字框 (PDF 绘图批注).
+   * 后三者的几何信息存在 cfi 里 (`a:1:...`), 见 services/pdfAnno.ts。
+   */
+  kind?: 'highlight' | 'bookmark' | 'ink' | 'shape' | 'text'
+  /** EPUB CFI; PDF 高亮为 `p:<page>:<rects>`, PDF 绘图批注为 `a:1:<json>` */
   cfi: string
   text: string
-  /** 想法 / 笔记 */
+  /** 想法 / 笔记 (文字框批注也用这个字段镜像正文, 方便搜索) */
   note?: string
   color: string
   createdAt: number
