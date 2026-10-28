@@ -2912,6 +2912,54 @@ function noteStamp(a: AnnotationRec) {
   return `${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())}/${WEEK_CN[d.getDay()]} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
 
+const CARD_SIZE_KEY = 'lightread-note-card-size'
+/** 卡片大小: 拖右下角改, 记在本地, 所有卡片共用 */
+const noteCardSize = ref<{ w: number; h: number }>((() => {
+  try {
+    const raw = localStorage.getItem(CARD_SIZE_KEY)
+    if (raw) {
+      const v = JSON.parse(raw) as { w?: number; h?: number }
+      if (typeof v?.w === 'number' && v.w >= 260) return { w: v.w, h: typeof v.h === 'number' ? v.h : 0 }
+    }
+  } catch {
+    /* 读不出来就用默认 */
+  }
+  return { w: 320, h: 0 }
+})())
+
+let cardResize: { x: number; y: number; w: number; h: number } | null = null
+
+function startCardResize(e: PointerEvent) {
+  const el = popEl.value
+  if (!el) return
+  e.preventDefault()
+  e.stopPropagation()
+  const r = el.getBoundingClientRect()
+  cardResize = { x: e.clientX, y: e.clientY, w: r.width, h: r.height }
+  window.addEventListener('pointermove', onCardResize)
+  window.addEventListener('pointerup', stopCardResize)
+}
+
+function onCardResize(e: PointerEvent) {
+  if (!cardResize) return
+  const w = Math.max(260, Math.min(cardResize.w + (e.clientX - cardResize.x), window.innerWidth - 40))
+  const h = Math.max(170, Math.min(cardResize.h + (e.clientY - cardResize.y), window.innerHeight - 80))
+  noteCardSize.value = { w, h }
+  measurePop()
+}
+
+function stopCardResize() {
+  cardResize = null
+  window.removeEventListener('pointermove', onCardResize)
+  window.removeEventListener('pointerup', stopCardResize)
+  try {
+    localStorage.setItem(CARD_SIZE_KEY, JSON.stringify(noteCardSize.value))
+  } catch {
+    /* 存不了就算了, 不影响本次使用 */
+  }
+  measurePop()
+}
+
 let noteDrag: { dx: number; dy: number } | null = null
 /** 每条笔记卡片拖到哪儿了, 本次阅读内记住 (不落库) */
 const noteCardPos = new Map<string, { x: number; y: number }>()
@@ -5780,7 +5828,12 @@ onBeforeUnmount(() => {
       v-if="activeAnnotation"
       ref="popEl"
       class="anno-pop note-card"
-      :style="{ left: `${popPos.x}px`, top: `${popPos.y}px` }"
+      :style="{
+        left: `${popPos.x}px`,
+        top: `${popPos.y}px`,
+        width: `${noteCardSize.w}px`,
+        height: noteCardSize.h ? `${noteCardSize.h}px` : undefined,
+      }"
     >
       <div class="note-card-head" @pointerdown.prevent="startNoteDrag">
         <svg class="note-card-ico" viewBox="0 0 20 20" aria-hidden="true">
@@ -5832,6 +5885,7 @@ onBeforeUnmount(() => {
           <button class="btn btn-sm btn-primary" @click="saveNote">{{ t('reader.saveNote') }}</button>
         </div>
       </div>
+      <div class="note-card-grip" :title="t('reader.noteResize')" @pointerdown="startCardResize" />
     </div>
 
     <!-- 引文/目录跳转后返回原位 -->
@@ -7927,6 +7981,36 @@ onBeforeUnmount(() => {
   inset: -4px;
   opacity: 0;
   cursor: pointer;
+}
+/* 右下角抓手: 按住可放大缩小整张卡片 */
+.note-card-grip {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  touch-action: none;
+  background: linear-gradient(
+    135deg,
+    transparent 52%,
+    #e0b52c 52%,
+    #e0b52c 58%,
+    transparent 58%,
+    transparent 68%,
+    #e0b52c 68%,
+    #e0b52c 74%,
+    transparent 74%
+  );
+}
+.note-card-body {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.note-card .note-input {
+  flex: 1 1 auto;
+  min-height: 64px;
+  resize: none;
 }
 .note-card-body {
   display: flex;

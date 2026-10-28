@@ -850,6 +850,7 @@ export default {
   'reader.markStrikeout': 'Strikethrough',
   'reader.markedUnderline': 'Underlined',
   'reader.markedStrikeout': 'Strikethrough added',
+  'reader.noteResize': 'Drag the corner to resize',
   'reader.writeNote': "Add note",
   'reader.notePlaceholder': 'Write down your thoughts…',
   'reader.deleteHighlight': "Delete highlight",

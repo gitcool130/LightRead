@@ -205,6 +205,18 @@ try {
     Math.abs(cardAfter.x - cardBefore.x) > 50 && Math.abs(cardAfter.y - cardBefore.y) > 30,
     '笔记卡片应该能拖动',
   )
+
+  // 8.75 拖右下角可以把卡片放大
+  const cardPreResize = await page.locator('.note-card').boundingBox()
+  const gripBox = await page.locator('.note-card-grip').boundingBox()
+  await page.mouse.move(gripBox.x + 8, gripBox.y + 8)
+  await page.mouse.down()
+  await page.mouse.move(gripBox.x + 8 + 120, gripBox.y + 8 + 70, { steps: 10 })
+  await page.mouse.up()
+  await page.waitForTimeout(260)
+  const cardResized = await page.locator('.note-card').boundingBox()
+  assert.ok(cardResized.width - cardPreResize.width > 80, '卡片应该能拖大')
+  assert.ok(cardResized.height - cardPreResize.height > 40, '卡片高度也应该跟着变')
   await page.locator('.anno-pop .btn:not(.btn-primary):not(.btn-danger)').last().click()
   await page.waitForTimeout(200)
 
@@ -231,6 +243,15 @@ try {
   assert.match(await page.locator('.anno-text-box').first().innerText(), /论证/)
   assert.equal(await page.locator('.p-hl-rect.p-hl-line').count(), 2, '刷新后下划线与删除线也应该还在')
   assert.equal(await page.locator('.p-note-pin').count(), 1, '刷新后笔记气泡也应该还在')
+  await page.locator('.p-note-pin').first().click()
+  await page.waitForTimeout(320)
+  const cardReloaded = await page.locator('.note-card').boundingBox()
+  assert.ok(
+    Math.abs(cardReloaded.width - cardResized.width) < 4,
+    '卡片大小应该记在本地, 刷新后还原',
+  )
+  await page.locator('.anno-pop .btn:not(.btn-primary):not(.btn-danger)').last().click()
+  await page.waitForTimeout(160)
   const pinReloaded = await page.locator('.p-note-pin').first().boundingBox()
   assert.equal(
     await page.locator('.p-note-pin').first().evaluate(e => getComputedStyle(e).backgroundColor),
