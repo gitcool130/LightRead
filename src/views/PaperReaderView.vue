@@ -1659,6 +1659,10 @@ const pageNotes = computed(() => {
   return map
 })
 
+/** 鼠标停在哪个气泡上: 只有这时才画那条指回原文的虚线 */
+const hoverNoteId = ref('')
+const noteHovered = (a: AnnotationRec) => hoverNoteId.value === a.id
+
 /** 文本注释气泡的配色 (实色, 比高亮的半透明色更醒目) */
 const NOTE_COLORS: Record<string, string> = {
   blue: '#2563eb',
@@ -5416,7 +5420,7 @@ onBeforeUnmount(() => {
                 <svg class="p-note-leaders" :width="displaySizeOf(n).w" :height="displaySizeOf(n).h">
                   <template v-for="pin in pageNotes.get(n) ?? []" :key="'l' + pin.key">
                     <line
-                      v-if="noteMoved(pin.a)"
+                      v-if="noteMoved(pin.a) && noteHovered(pin.a)"
                       :x1="noteAnchorPt(n, pin.r).x"
                       :y1="noteAnchorPt(n, pin.r).y"
                       :x2="notePinPt(n, pin.r, pin.a).x"
@@ -5433,6 +5437,8 @@ onBeforeUnmount(() => {
                   :style="notePinStyle(n, pin.r, pin.a)"
                   :title="pin.a.text"
                   :aria-label="t('reader.writeNote')"
+                  @pointerenter="hoverNoteId = pin.a.id"
+                  @pointerleave="hoverNoteId = ''"
                   @pointerdown="startPinDrag($event, pin.a, n)"
                   @click.stop="onPinClick(pin.a, n, pin.r)"
                 >
@@ -5515,7 +5521,7 @@ onBeforeUnmount(() => {
                 <svg class="p-note-leaders" :width="displaySizeOf(n).w" :height="displaySizeOf(n).h">
                   <template v-for="pin in pageNotes.get(n) ?? []" :key="'l' + pin.key">
                     <line
-                      v-if="noteMoved(pin.a)"
+                      v-if="noteMoved(pin.a) && noteHovered(pin.a)"
                       :x1="noteAnchorPt(n, pin.r).x"
                       :y1="noteAnchorPt(n, pin.r).y"
                       :x2="notePinPt(n, pin.r, pin.a).x"
@@ -5532,6 +5538,8 @@ onBeforeUnmount(() => {
                   :style="notePinStyle(n, pin.r, pin.a)"
                   :title="pin.a.text"
                   :aria-label="t('reader.writeNote')"
+                  @pointerenter="hoverNoteId = pin.a.id"
+                  @pointerleave="hoverNoteId = ''"
                   @pointerdown="startPinDrag($event, pin.a, n)"
                   @click.stop="onPinClick(pin.a, n, pin.r)"
                 >
