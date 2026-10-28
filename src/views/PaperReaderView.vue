@@ -1594,6 +1594,11 @@ const annotations = ref<AnnotationRec[]>([])
 const activeAnnotation = ref<AnnotationRec | null>(null)
 const noteDraft = ref('')
 const popPos = ref({ x: 0, y: 0 })
+/** 拟注锚点 (视口坐标): 引线从这里指向气泡 */
+const popAnchor = ref<{ x: number; y: number } | null>(null)
+const popEl = ref<HTMLElement | null>(null)
+const popSize = ref({ w: 320, h: 180 })
+const vp = ref({ w: window.innerWidth, h: window.innerHeight })
 
 const encodeLoc = (page: number, rects: HlRect[]) =>
   `p:${page}:${JSON.stringify(rects.map(r => [r.x, r.y, r.w, r.h].map(v => +v.toFixed(2))))}`
@@ -1654,8 +1659,10 @@ function openNote(a: AnnotationRec, page: number, r: HlRect) {
   const x = hb ? hb.left + (r.x + r.w) * display.sx : window.innerWidth / 2
   const y = hb ? hb.top + r.y * display.sy : window.innerHeight / 2
   noteDraft.value = a.note ?? ''
-  popPos.value = clampPop(x - 160, y + 12)
+  popPos.value = noteCardPos.get(a.id) ?? clampPop(x - 160, y + 34)
+  popAnchor.value = { x, y }
   activeAnnotation.value = a
+  measurePop()
 }
 
 const markStyle = (page: number, r: HlRect, a: AnnotationRec) => {
@@ -2712,8 +2719,10 @@ async function addHighlight(color: string, withNote = false, kind: TextMarkKind 
   selection.value = null
   if (withNote) {
     noteDraft.value = ''
-    popPos.value = clampPop(anchor.x - 160, anchor.y + 10)
+    popPos.value = clampPop(anchor.x - 160, anchor.y + 34)
+    popAnchor.value = anchor
     activeAnnotation.value = saved
+    measurePop()
   } else {
     toast(
       t(kind === 'underline'
@@ -2732,6 +2741,78 @@ function clampPop(x: number, y: number) {
     y: Math.max(12, Math.min(y, window.innerHeight - 240)),
   }
 }
+
+/** 卡片边缘到锚点的引线: 竖着连, 水平位置夹在卡片内 */
+const leader = computed(() => {
+  const a = popAnchor.value
+  if (!a || !activeAnnotation.value) return null
+  const { x, y } = popPos.value
+  const { w, h } = popSize.value
+  const ax = Math.max(x + 10, Math.min(a.x, x + w - 10))
+  const below = a.y > y + h / 2
+  return { x1: ax, y1: below ? y + h : y, x2: a.x, y2: a.y }
+})
+
+const leaderHead = computed(() => {
+  const l = leader.value
+  if (!l) return ''
+  const ang = Math.atan2(l.y2 - l.y1, l.x2 - l.x1)
+  const len = 10
+  const spread = 0.4
+  const p1x = l.x2 - len * Math.cos(ang - spread)
+  const p1y = l.y2 - len * Math.sin(ang - spread)
+  const p2x = l.x2 - len * Math.cos(ang + spread)
+  const p2y = l.y2 - len * Math.sin(ang + spread)
+  return `M${l.x2.toFixed(1)},${l.y2.toFixed(1)} L${p1x.toFixed(1)},${p1y.toFixed(1)} L${p2x.toFixed(1)},${p2y.toFixed(1)} Z`
+})
+
+const WEEK_CN = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+
+function noteStamp(a: AnnotationRec) {
+  const d = new Date(a.createdAt)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())}/${WEEK_CN[d.getDay()]} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
+let noteDrag: { dx: number; dy: number } | null = null
+/** 每条笔记卡片拖到哪儿了, 本次阅读内记住 (不落库) */
+const noteCardPos = new Map<string, { x: number; y: number }>()
+
+function startNoteDrag(e: PointerEvent) {
+  const el = popEl.value
+  if (!el) return
+  const r = el.getBoundingClientRect()
+  noteDrag = { dx: e.clientX - r.left, dy: e.clientY - r.top }
+  window.addEventListener('pointermove', onNoteDrag)
+  window.addEventListener('pointerup', stopNoteDrag)
+}
+
+function onNoteDrag(e: PointerEvent) {
+  if (!noteDrag) return
+  popPos.value = {
+    x: Math.max(4, Math.min(e.clientX - noteDrag.dx, window.innerWidth - 80)),
+    y: Math.max(4, Math.min(e.clientY - noteDrag.dy, window.innerHeight - 60)),
+  }
+}
+
+function stopNoteDrag() {
+  noteDrag = null
+  window.removeEventListener('pointermove', onNoteDrag)
+  window.removeEventListener('pointerup', stopNoteDrag)
+  const id = activeAnnotation.value?.id
+  if (id) noteCardPos.set(id, { ...popPos.value })
+}
+
+/** 卡片尺寸量一下, 引线才知道从哪儿出去 */
+function measurePop() {
+  void nextTick(() => {
+    const el = popEl.value
+    if (el) popSize.value = { w: el.offsetWidth, h: el.offsetHeight }
+    vp.value = { w: window.innerWidth, h: window.innerHeight }
+  })
+}
+
+watch(activeAnnotation, () => measurePop())
 
 async function saveNote() {
   if (!activeAnnotation.value) return
@@ -2788,8 +2869,10 @@ function onHolderClick(e: MouseEvent, page: number) {
   )
   if (hit) {
     noteDraft.value = hit.a.note ?? ''
-    popPos.value = clampPop(e.clientX - 160, e.clientY + 12)
+    popPos.value = noteCardPos.get(hit.a.id) ?? clampPop(e.clientX - 160, e.clientY + 34)
+    popAnchor.value = { x: e.clientX, y: e.clientY }
     activeAnnotation.value = hit.a
+    measurePop()
     return
   }
   if (bookPaged.value) {
@@ -5519,19 +5602,45 @@ onBeforeUnmount(() => {
     </div>
 
     <!-- 高亮想法编辑浮层 -->
-    <div v-if="activeAnnotation" class="anno-pop card" :style="{ left: `${popPos.x}px`, top: `${popPos.y}px` }">
-      <p class="quote">{{ activeAnnotation.text }}</p>
-      <textarea
-        v-model="noteDraft"
-        class="note-input input"
-        rows="3"
-        :placeholder="t('reader.notePlaceholder')"
-      />
-      <div class="pop-actions">
-        <button class="btn btn-sm btn-danger" @click="removeAnnotation(activeAnnotation)">{{ t('reader.deleteHighlight') }}</button>
-        <span style="flex: 1" />
-        <button class="btn btn-sm" @click="activeAnnotation = null">{{ t('common.cancel') }}</button>
-        <button class="btn btn-sm btn-primary" @click="saveNote">{{ t('reader.saveNote') }}</button>
+    <svg v-if="activeAnnotation && leader" class="note-leader" :width="vp.w" :height="vp.h">
+      <line :x1="leader.x1" :y1="leader.y1" :x2="leader.x2" :y2="leader.y2" />
+      <path :d="leaderHead" />
+    </svg>
+    <div
+      v-if="activeAnnotation"
+      ref="popEl"
+      class="anno-pop note-card"
+      :style="{ left: `${popPos.x}px`, top: `${popPos.y}px` }"
+    >
+      <div class="note-card-head" @pointerdown.prevent="startNoteDrag">
+        <svg class="note-card-ico" viewBox="0 0 20 20" aria-hidden="true">
+          <path d="M4.75 4h10.5v8.4H9.3l-2.9 2.4v-2.4H4.75z" />
+        </svg>
+        <span class="note-card-meta">{{ noteStamp(activeAnnotation) }}</span>
+        <button
+          type="button"
+          class="note-card-x"
+          :aria-label="t('common.close')"
+          :title="t('common.close')"
+          @click="activeAnnotation = null"
+        >
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6.2 6.2l7.6 7.6M13.8 6.2l-7.6 7.6" /></svg>
+        </button>
+      </div>
+      <div class="note-card-body">
+        <p class="quote">{{ activeAnnotation.text }}</p>
+        <textarea
+          v-model="noteDraft"
+          class="note-input input"
+          rows="4"
+          :placeholder="t('reader.notePlaceholder')"
+        />
+        <div class="pop-actions">
+          <button class="btn btn-sm btn-danger" @click="removeAnnotation(activeAnnotation)">{{ t('reader.deleteHighlight') }}</button>
+          <span style="flex: 1" />
+          <button class="btn btn-sm" @click="activeAnnotation = null">{{ t('common.cancel') }}</button>
+          <button class="btn btn-sm btn-primary" @click="saveNote">{{ t('reader.saveNote') }}</button>
+        </div>
       </div>
     </div>
 
@@ -7498,6 +7607,91 @@ onBeforeUnmount(() => {
   color: var(--text);
   overflow: auto;
   white-space: pre-wrap;
+}
+
+/* ---- 引线 + 气泡卡片 (可拖动, 卡片边到锚点连一条带箭头的线) ---- */
+.note-leader {
+  position: fixed;
+  inset: 0;
+  z-index: 71;
+  pointer-events: none;
+}
+.note-leader line {
+  stroke: #e0b52c;
+  stroke-width: 1.6;
+}
+.note-leader path {
+  fill: #e0b52c;
+}
+.anno-pop.note-card {
+  width: min(320px, calc(100vw - 32px));
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  border: 2px solid #f0c24a;
+  background: #fffdf0;
+  box-shadow: var(--shadow-2);
+}
+.note-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 9px;
+  background: #fdf3c8;
+  border-bottom: 1px dashed #e8cf85;
+  color: #8a6a17;
+  font-size: var(--fs-caption);
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.note-card-head:active {
+  cursor: grabbing;
+}
+.note-card-ico {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+}
+.note-card-meta {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.note-card-x {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: #8a6a17;
+  cursor: pointer;
+  border-radius: var(--radius-xs);
+}
+.note-card-x:hover {
+  background: color-mix(in srgb, #8a6a17 12%, transparent);
+}
+.note-card-x svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+}
+.note-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 11px 11px;
 }
 
 /* ---- 想法编辑浮层 ---- */

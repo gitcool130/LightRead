@@ -172,6 +172,21 @@ try {
     '这条要复核出处',
     '点气泡应打开原笔记',
   )
+
+  // 8.7 卡片带引线, 且能拖动
+  assert.equal(await page.locator('.note-leader line').count(), 1, '笔记卡片应该有一条指向文字的引线')
+  const cardBefore = await page.locator('.note-card').boundingBox()
+  const headBox = await page.locator('.note-card-head').boundingBox()
+  await page.mouse.move(headBox.x + 30, headBox.y + headBox.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(headBox.x + 30 - 120, headBox.y + headBox.height / 2 - 60, { steps: 8 })
+  await page.mouse.up()
+  await page.waitForTimeout(220)
+  const cardAfter = await page.locator('.note-card').boundingBox()
+  assert.ok(
+    Math.abs(cardAfter.x - cardBefore.x) > 50 && Math.abs(cardAfter.y - cardBefore.y) > 30,
+    '笔记卡片应该能拖动',
+  )
   await page.locator('.anno-pop .btn:not(.btn-primary):not(.btn-danger)').last().click()
   await page.waitForTimeout(200)
 
