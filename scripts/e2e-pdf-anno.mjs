@@ -138,6 +138,24 @@ try {
   await page.waitForTimeout(200)
   assert.equal(await page.locator('.anno-tray').count(), 0, 'Esc 应退出批注工具')
 
+  // 8.5 文字类批注: 拖选文字 → 选区工具条里的下划线 / 删除线
+  const selectText = async (yRatio, fromX, toX) => {
+    await page.mouse.move(at(fromX, yRatio).x, at(fromX, yRatio).y)
+    await page.mouse.down()
+    await page.mouse.move(at(toX, yRatio).x, at(toX, yRatio).y, { steps: 10 })
+    await page.mouse.up()
+    await page.waitForTimeout(320)
+  }
+  const lineMarks = () => page.locator('.p-hl-rect.p-hl-line').count()
+
+  await selectText(0.2, 0.15, 0.6)
+  await page.locator('.sel-act', { hasText: '下划线' }).first().click()
+  await page.waitForTimeout(260)
+  await selectText(0.245, 0.15, 0.6)
+  await page.locator('.sel-act', { hasText: '删除线' }).first().click()
+  await page.waitForTimeout(260)
+  assert.equal(await lineMarks(), 2, '下划线与删除线应该落在页面上')
+
   const shot = join(tmpdir(), 'lightread-pdf-anno.png')
   await page.screenshot({ path: shot })
 
@@ -148,13 +166,14 @@ try {
   assert.equal(await vectorCount(), 5, '刷新后绘图批注应该从存储里恢复')
   assert.equal(await page.locator('.anno-text-box').count(), 1, '刷新后文字批注也应该还在')
   assert.match(await page.locator('.anno-text-box').first().innerText(), /论证/)
+  assert.equal(await page.locator('.p-hl-rect.p-hl-line').count(), 2, '刷新后下划线与删除线也应该还在')
 
   // 10. 笔记抽屉列出绘图批注
   await page.locator('button[title="目录"]').click()
   await page.locator('.drawer-tabs button', { hasText: '划线想法' }).click()
   await page.waitForTimeout(200)
   const items = await page.locator('.drawer-body .anno-item').count()
-  assert.equal(items, 6, '抽屉里应有 5 条绘图批注 + 1 条文字批注')
+  assert.equal(items, 8, '抽屉里应有 5 条绘图批注 + 1 条文字批注 + 2 条文字标记')
 
   // 11. 换成滚动模式: 同一套页内坐标, 批注要跟着页面走
   await page.locator('.drawer-head button[title="关闭"]').click()

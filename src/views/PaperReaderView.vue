@@ -1588,6 +1588,8 @@ interface SelInfo {
 }
 
 const selection = ref<SelInfo | null>(null)
+/** 最近用过的批注色: 下划线 / 删除线 / 写笔记沿用, 点色块则切色 */
+const markColor = ref('yellow')
 const annotations = ref<AnnotationRec[]>([])
 const activeAnnotation = ref<AnnotationRec | null>(null)
 const noteDraft = ref('')
@@ -1622,16 +1624,32 @@ const pageHls = computed(() => {
   return map
 })
 
-const hlStyle = (page: number, r: HlRect, color: string) => {
+const markStyle = (page: number, r: HlRect, a: AnnotationRec) => {
   const display = displaySizeOf(page)
-  return {
+  const c = HIGHLIGHT_COLORS[a.color] ?? a.color
+  const box = {
     left: `${r.x * display.sx}px`,
     top: `${r.y * display.sy}px`,
     width: `${r.w * display.sx}px`,
     height: `${r.h * display.sy}px`,
-    background: HIGHLIGHT_COLORS[color] ?? color,
   }
+  if (a.kind === 'underline') {
+    return { ...box, background: 'none', borderBottom: `2px solid ${c}` }
+  }
+  if (a.kind === 'strikeout') {
+    return {
+      ...box,
+      background:
+        `linear-gradient(to bottom, transparent calc(50% - 1px), ${c} calc(50% - 1px), ` +
+        `${c} calc(50% + 1px), transparent calc(50% + 1px))`,
+    }
+  }
+  return { ...box, background: c }
 }
+
+/** 下划线 / 删除线是实色线条, 不吃高亮的半透明与正片叠底 */
+const markClass = (a: AnnotationRec) =>
+  a.kind === 'underline' || a.kind === 'strikeout' ? 'p-hl-line' : ''
 
 /* ================= 绘图批注: 画笔 / 荧光笔 / 矩形 / 椭圆 / 直线 / 箭头 / 文字 =================
  * 手感与工具集借鉴 PDF-Annotator-Qt: 拖选文字高亮、自由笔迹 (含荧光笔)、形状标注、
@@ -2628,13 +2646,25 @@ const selBarStyle = computed(() => {
   }
 })
 
-async function addHighlight(color: string, withNote = false) {
+/** 文字类批注: 高亮铺底色, 下划线画字底, 删除线画字中 */
+type TextMarkKind = 'highlight' | 'underline' | 'strikeout'
+
+function pickMarkColor(name: string) {
+  markColor.value = name
+  void addHighlight(name)
+}
+
+async function addMark(kind: TextMarkKind) {
+  await addHighlight(markColor.value, false, kind)
+}
+
+async function addHighlight(color: string, withNote = false, kind: TextMarkKind = 'highlight') {
   const s = selection.value
   if (!s) return
   const storage = await getStorage()
   const rec: Omit<AnnotationRec, 'id'> = {
     bookId,
-    kind: 'highlight',
+    kind,
     cfi: encodeLoc(s.page, s.rects),
     text: s.text.slice(0, 500),
     color,
@@ -2651,7 +2681,14 @@ async function addHighlight(color: string, withNote = false) {
     popPos.value = clampPop(anchor.x - 160, anchor.y + 10)
     activeAnnotation.value = saved
   } else {
-    toast(t('reader.highlighted'), 'success')
+    toast(
+      t(kind === 'underline'
+        ? 'reader.markedUnderline'
+        : kind === 'strikeout'
+          ? 'reader.markedStrikeout'
+          : 'reader.highlighted'),
+      'success',
+    )
   }
 }
 
@@ -5064,7 +5101,7 @@ onBeforeUnmount(() => {
                 />
               </div>
               <div class="p-hl">
-                <div v-for="h in pageHls.get(n) ?? []" :key="h.key" class="p-hl-rect" :style="hlStyle(n, h.r, h.a.color)" />
+                <div v-for="h in pageHls.get(n) ?? []" :key="h.key" :class="['p-hl-rect', markClass(h.a)]" :style="markStyle(n, h.r, h.a)" />
               </div>
               <div v-if="liveRects && liveRects.page === n" class="p-sel">
                 <div
@@ -5134,7 +5171,7 @@ onBeforeUnmount(() => {
                 />
               </div>
               <div class="p-hl">
-                <div v-for="h in pageHls.get(n) ?? []" :key="h.key" class="p-hl-rect" :style="hlStyle(n, h.r, h.a.color)" />
+                <div v-for="h in pageHls.get(n) ?? []" :key="h.key" :class="['p-hl-rect', markClass(h.a)]" :style="markStyle(n, h.r, h.a)" />
               </div>
               <!-- PDFium 几何选区 -->
               <div v-if="liveRects && liveRects.page === n" class="p-sel">
@@ -5343,13 +5380,44 @@ onBeforeUnmount(() => {
           class="sel-color"
           :title="`${t('reader.highlight')} · ${t(`reader.highlightColor.${name}`)}`"
           :aria-label="`${t('reader.highlight')} · ${t(`reader.highlightColor.${name}`)}`"
-          @click="addHighlight(name as string)"
+          @click="pickMarkColor(name as string)"
         >
           <span class="sel-color-dot" :style="{ background: hex }" />
         </button>
       </div>
       <span class="sel-sep" />
-      <button type="button" class="sel-act" @click="addHighlight('yellow', true)">
+      <button
+        type="button"
+        class="sel-act"
+        :title="t('reader.markUnderline')"
+        :aria-label="t('reader.markUnderline')"
+        @click="addMark('underline')"
+      >
+        <svg viewBox="0 0 20 20" aria-hidden="true">
+          <path d="M5.5 3.9h9M10 3.9v8.2" />
+          <path class="mk-brand" d="M5.2 15.6h9.6" />
+        </svg>
+        <span>{{ t('reader.markUnderline') }}</span>
+      </button>
+      <button
+        type="button"
+        class="sel-act"
+        :title="t('reader.markStrikeout')"
+        :aria-label="t('reader.markStrikeout')"
+        @click="addMark('strikeout')"
+      >
+        <svg viewBox="0 0 20 20" aria-hidden="true">
+          <path d="M5.5 3.9h9M10 3.9v12" />
+          <path class="mk-danger" d="M4.2 9.9h11.6" />
+        </svg>
+        <span>{{ t('reader.markStrikeout') }}</span>
+      </button>
+      <button
+        type="button"
+        class="sel-act"
+        :title="t('reader.writeNote')"
+        @click="addHighlight(markColor, true)"
+      >
         <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4.25 3.75h11.5v9H9l-3.25 2.7v-2.7h-1.5z" /><path d="M10 6.25v4M8 8.25h4" /></svg>
         <span>{{ t('reader.writeNote') }}</span>
       </button>
@@ -6659,6 +6727,12 @@ onBeforeUnmount(() => {
   mix-blend-mode: multiply;
   border-radius: 1px;
 }
+/* 下划线 / 删除线: 实色线条, 不透明度与混合模式回到普通 */
+.p-hl-rect.p-hl-line {
+  opacity: 1;
+  mix-blend-mode: normal;
+  border-radius: 0;
+}
 /* PDFium 几何选区层 */
 .p-sel {
   position: absolute;
@@ -7243,6 +7317,13 @@ onBeforeUnmount(() => {
 .sel-act:active,
 .sel-close:active {
   transform: scale(0.96);
+}
+/* 下划线与删除线图标的两道杠, 照参考图配色 */
+.sel-act svg .mk-brand {
+  stroke: #e8890c;
+}
+.sel-act svg .mk-danger {
+  stroke: #dc3a2f;
 }
 .sel-act-ai {
   background: color-mix(in srgb, var(--brand) 8%, transparent);
