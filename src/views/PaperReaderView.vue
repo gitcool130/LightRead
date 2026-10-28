@@ -1624,6 +1624,40 @@ const pageHls = computed(() => {
   return map
 })
 
+/** 有笔记的批注: 在末行右侧挂一个气泡, 点开就是原来的想法弹层 */
+const pageNotes = computed(() => {
+  const map = new Map<number, Array<{ a: AnnotationRec; r: HlRect; key: string }>>()
+  for (const a of highlights.value) {
+    if (!a.note?.trim()) continue
+    const loc = decodeLoc(a.cfi)
+    const last = loc?.rects[loc.rects.length - 1]
+    if (!loc || !last) continue
+    const list = map.get(loc.page) ?? []
+    list.push({ a, r: last, key: a.id })
+    map.set(loc.page, list)
+  }
+  return map
+})
+
+const notePinStyle = (page: number, r: HlRect) => {
+  const display = displaySizeOf(page)
+  return {
+    left: `${(r.x + r.w) * display.sx + 3}px`,
+    top: `${r.y * display.sy - 2}px`,
+  }
+}
+
+function openNote(a: AnnotationRec, page: number, r: HlRect) {
+  const holder = holderOf(page)
+  const hb = holder?.getBoundingClientRect()
+  const display = displaySizeOf(page)
+  const x = hb ? hb.left + (r.x + r.w) * display.sx : window.innerWidth / 2
+  const y = hb ? hb.top + r.y * display.sy : window.innerHeight / 2
+  noteDraft.value = a.note ?? ''
+  popPos.value = clampPop(x - 160, y + 12)
+  activeAnnotation.value = a
+}
+
 const markStyle = (page: number, r: HlRect, a: AnnotationRec) => {
   const display = displaySizeOf(page)
   const c = HIGHLIGHT_COLORS[a.color] ?? a.color
@@ -5103,6 +5137,22 @@ onBeforeUnmount(() => {
               <div class="p-hl">
                 <div v-for="h in pageHls.get(n) ?? []" :key="h.key" :class="['p-hl-rect', markClass(h.a)]" :style="markStyle(n, h.r, h.a)" />
               </div>
+              <div v-if="pageNotes.get(n)?.length" class="p-notes">
+                <button
+                  v-for="pin in pageNotes.get(n) ?? []"
+                  :key="pin.key"
+                  type="button"
+                  class="p-note-pin"
+                  :style="notePinStyle(n, pin.r)"
+                  :title="pin.a.text"
+                  :aria-label="t('reader.writeNote')"
+                  @click.stop="openNote(pin.a, n, pin.r)"
+                >
+                  <svg viewBox="0 0 20 20" aria-hidden="true">
+                    <path d="M4.75 4h10.5v8.4H9.3l-2.9 2.4v-2.4H4.75z" />
+                  </svg>
+                </button>
+              </div>
               <div v-if="liveRects && liveRects.page === n" class="p-sel">
                 <div
                   v-for="(r, i) in liveRects.rects"
@@ -5172,6 +5222,22 @@ onBeforeUnmount(() => {
               </div>
               <div class="p-hl">
                 <div v-for="h in pageHls.get(n) ?? []" :key="h.key" :class="['p-hl-rect', markClass(h.a)]" :style="markStyle(n, h.r, h.a)" />
+              </div>
+              <div v-if="pageNotes.get(n)?.length" class="p-notes">
+                <button
+                  v-for="pin in pageNotes.get(n) ?? []"
+                  :key="pin.key"
+                  type="button"
+                  class="p-note-pin"
+                  :style="notePinStyle(n, pin.r)"
+                  :title="pin.a.text"
+                  :aria-label="t('reader.writeNote')"
+                  @click.stop="openNote(pin.a, n, pin.r)"
+                >
+                  <svg viewBox="0 0 20 20" aria-hidden="true">
+                    <path d="M4.75 4h10.5v8.4H9.3l-2.9 2.4v-2.4H4.75z" />
+                  </svg>
+                </button>
               </div>
               <!-- PDFium 几何选区 -->
               <div v-if="liveRects && liveRects.page === n" class="p-sel">
@@ -6727,6 +6793,40 @@ onBeforeUnmount(() => {
   mix-blend-mode: multiply;
   border-radius: 1px;
 }
+/* 笔记气泡: 挂在末行右侧, 只有它拦截点击 */
+.p-notes {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.p-note-pin {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--brand) 16%, transparent);
+  color: var(--brand);
+  pointer-events: auto;
+  cursor: pointer;
+  transform: translate(-2px, -1px);
+}
+.p-note-pin svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linejoin: round;
+}
+.p-note-pin:hover {
+  background: color-mix(in srgb, var(--brand) 26%, transparent);
+}
+
 /* 下划线 / 删除线: 实色线条, 不透明度与混合模式回到普通 */
 .p-hl-rect.p-hl-line {
   opacity: 1;

@@ -156,6 +156,25 @@ try {
   await page.waitForTimeout(260)
   assert.equal(await lineMarks(), 2, '下划线与删除线应该落在页面上')
 
+  // 8.6 写想法 → 页面上挂一个可点的笔记气泡
+  await selectText(0.29, 0.15, 0.6)
+  await page.locator('.sel-act', { hasText: '写想法' }).first().click()
+  const noteArea = page.locator('.anno-pop textarea').first()
+  await noteArea.waitFor()
+  await noteArea.fill('这条要复核出处')
+  await page.locator('.anno-pop .btn-primary').click()
+  await page.waitForTimeout(320)
+  assert.equal(await page.locator('.p-note-pin').count(), 1, '写想法后页面上应出现笔记气泡')
+  await page.locator('.p-note-pin').first().click()
+  await page.waitForTimeout(260)
+  assert.equal(
+    await page.locator('.anno-pop textarea').first().inputValue(),
+    '这条要复核出处',
+    '点气泡应打开原笔记',
+  )
+  await page.locator('.anno-pop .btn:not(.btn-primary):not(.btn-danger)').last().click()
+  await page.waitForTimeout(200)
+
   const shot = join(tmpdir(), 'lightread-pdf-anno.png')
   await page.screenshot({ path: shot })
 
@@ -167,13 +186,14 @@ try {
   assert.equal(await page.locator('.anno-text-box').count(), 1, '刷新后文字批注也应该还在')
   assert.match(await page.locator('.anno-text-box').first().innerText(), /论证/)
   assert.equal(await page.locator('.p-hl-rect.p-hl-line').count(), 2, '刷新后下划线与删除线也应该还在')
+  assert.equal(await page.locator('.p-note-pin').count(), 1, '刷新后笔记气泡也应该还在')
 
   // 10. 笔记抽屉列出绘图批注
   await page.locator('button[title="目录"]').click()
   await page.locator('.drawer-tabs button', { hasText: '划线想法' }).click()
   await page.waitForTimeout(200)
   const items = await page.locator('.drawer-body .anno-item').count()
-  assert.equal(items, 8, '抽屉里应有 5 条绘图批注 + 1 条文字批注 + 2 条文字标记')
+  assert.equal(items, 9, '抽屉里应有 5 条绘图批注 + 1 条文字批注 + 2 条文字标记 + 1 条想法')
 
   // 11. 换成滚动模式: 同一套页内坐标, 批注要跟着页面走
   await page.locator('.drawer-head button[title="关闭"]').click()
