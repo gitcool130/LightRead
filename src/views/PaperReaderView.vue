@@ -3109,6 +3109,32 @@ const SEL_PROMPT =
 
 const selTr = ref<{ src: string; out: string; busy: boolean } | null>(null)
 const selTrPos = ref({ x: 0, y: 0 })
+/** 划词翻译 / AI 解读卡片: 按住标题栏可以拖走 */
+let selTrDrag: { dx: number; dy: number } | null = null
+
+function startSelTrDrag(e: PointerEvent) {
+  const el = (e.currentTarget as HTMLElement | null)?.closest('.sel-tr') as HTMLElement | null
+  if (!el) return
+  const r = el.getBoundingClientRect()
+  selTrDrag = { dx: e.clientX - r.left, dy: e.clientY - r.top }
+  e.preventDefault()
+  window.addEventListener('pointermove', onSelTrDrag)
+  window.addEventListener('pointerup', stopSelTrDrag)
+}
+
+function onSelTrDrag(e: PointerEvent) {
+  if (!selTrDrag) return
+  selTrPos.value = {
+    x: Math.max(4, Math.min(e.clientX - selTrDrag.dx, window.innerWidth - 120)),
+    y: Math.max(4, Math.min(e.clientY - selTrDrag.dy, window.innerHeight - 60)),
+  }
+}
+
+function stopSelTrDrag() {
+  selTrDrag = null
+  window.removeEventListener('pointermove', onSelTrDrag)
+  window.removeEventListener('pointerup', stopSelTrDrag)
+}
 let selTrSession = 0
 
 async function translateSelection() {
@@ -5832,7 +5858,7 @@ onBeforeUnmount(() => {
 
     <!-- 划词翻译浮卡 (流式) -->
     <div v-if="selTr" class="sel-tr card" :style="{ left: `${selTrPos.x}px`, top: `${selTrPos.y}px` }">
-      <div class="sel-tr-head">
+      <div class="sel-tr-head" @pointerdown="startSelTrDrag">
         <strong>{{ isPaper ? t('paper.selTranslate') : t('ai.explain') }}</strong>
         <span v-if="selTr.busy" class="pt-busy">{{ t('paper.translating') }}</span>
         <span style="flex: 1" />
@@ -7896,6 +7922,12 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 8px;
   font-size: 13px;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.sel-tr-head:active {
+  cursor: grabbing;
 }
 .sel-tr-src {
   font-size: 12px;
