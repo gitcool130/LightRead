@@ -1,0 +1,81 @@
+name: Build (windows, dev)
+
+# 手动触发的小工作流：只编译 Windows 桌面版，产出「绿色 exe」和 NSIS 安装包，
+# 上传成 Actions 产物供下载。**不推 tag、不建 release、不改版本号**，
+# 和 release.yml 那条正式发版流程互不干扰。
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: '要构建的分支 / 提交（留空 = 触发时所在的分支）'
+        required: false
+        default: ''
+      bundles:
+        description: '打包方式：nsis 出安装包，none 只要绿色 exe'
+        required: false
+        default: 'nsis'
+        type: choice
+        options:
+          - nsis
+          - none
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-win-dev-${{ inputs.ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: 装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: 装 Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      # Rust 目标目录很大，不缓存的话每次都要重编十几分钟
+      - name: 缓存 Rust 构建
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: 'src-tauri -> target'
+
+      - name: 装前端依赖
+        run: npm ci
+
+      - name: 类型检查与单测
+        run: |
+          npx vue-tsc -b
+          npm run test:pdf-anno
+
+      - name: 编译 Windows 版
+        run: npm run tauri build -- --bundles ${{ inputs.bundles }}
+
+      - name: 收集产物
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path out | Out-Null
+          Copy-Item src-tauri\target\release\lightread.exe out\ -Force
+          $nsis = Get-ChildItem src-tauri\target\release\bundle\nsis\*.exe -ErrorAction SilentlyContinue
+          if ($nsis) { Copy-Item $nsis.FullName out\ -Force }
+          Get-ChildItem out | Select-Object Name, Length | Format-Table -AutoSize
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: lightread-windows-${{ github.sha }}
+          path: out/*
+          if-no-files-found: error
+          retention-days: 14
