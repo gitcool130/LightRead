@@ -2931,6 +2931,22 @@ const noteCardSize = ref<{ w: number; h: number }>((() => {
   return { w: 320, h: 0 }
 })())
 
+const CARD_FONT_KEY = 'lightread-note-card-font'
+/** 卡片正文字号, 记在本地 */
+const noteCardFont = ref<number>((() => {
+  const n = Number(localStorage.getItem(CARD_FONT_KEY))
+  return Number.isFinite(n) && n >= 11 && n <= 26 ? n : 13
+})())
+
+function bumpNoteFont(delta: number) {
+  noteCardFont.value = Math.max(11, Math.min(26, noteCardFont.value + delta))
+  try {
+    localStorage.setItem(CARD_FONT_KEY, String(noteCardFont.value))
+  } catch {
+    /* 存不了不影响使用 */
+  }
+}
+
 let cardResize: { x: number; y: number; w: number; h: number } | null = null
 
 function startCardResize(e: PointerEvent) {
@@ -5841,6 +5857,7 @@ onBeforeUnmount(() => {
         top: `${popPos.y}px`,
         width: `${noteCardSize.w}px`,
         height: noteCardSize.h ? `${noteCardSize.h}px` : undefined,
+        '--note-fs': `${noteCardFont}px`,
       }"
     >
       <div class="note-card-head" @pointerdown.prevent="startNoteDrag">
@@ -5878,6 +5895,26 @@ onBeforeUnmount(() => {
               @input="setNoteColor(activeAnnotation, ($event.target as HTMLInputElement).value)"
             />
           </label>
+          <span class="note-fs">
+            <button
+              type="button"
+              class="note-fs-btn"
+              :title="t('reader.noteFontSmaller')"
+              :aria-label="t('reader.noteFontSmaller')"
+              @click="bumpNoteFont(-1)"
+            >
+              A−
+            </button>
+            <button
+              type="button"
+              class="note-fs-btn"
+              :title="t('reader.noteFontLarger')"
+              :aria-label="t('reader.noteFontLarger')"
+              @click="bumpNoteFont(1)"
+            >
+              A+
+            </button>
+          </span>
         </div>
         <p class="quote">{{ activeAnnotation.text }}</p>
         <textarea
@@ -7984,6 +8021,26 @@ onBeforeUnmount(() => {
   box-shadow: 0 0 0 1px color-mix(in srgb, #000 12%, transparent);
   background: conic-gradient(#e5484d, #f76b15, #12a150, #2563eb, #7c5cff, #e5484d);
 }
+.note-fs {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 4px;
+}
+.note-fs-btn {
+  min-width: 26px;
+  padding: 0 6px;
+  height: 20px;
+  border: 1px solid color-mix(in srgb, #8a6a17 24%, transparent);
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: #8a6a17;
+  font-size: var(--fs-caption);
+  line-height: 1;
+  cursor: pointer;
+}
+.note-fs-btn:hover {
+  background: color-mix(in srgb, #8a6a17 10%, transparent);
+}
 .note-color-custom input {
   position: absolute;
   inset: -4px;
@@ -8019,6 +8076,8 @@ onBeforeUnmount(() => {
   flex: 1 1 auto;
   min-height: 64px;
   resize: none;
+  font-size: var(--note-fs, 13px);
+  line-height: 1.7;
 }
 .note-card-body {
   display: flex;

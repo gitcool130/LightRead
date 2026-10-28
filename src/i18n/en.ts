@@ -851,6 +851,8 @@ export default {
   'reader.markedUnderline': 'Underlined',
   'reader.markedStrikeout': 'Strikethrough added',
   'reader.noteResize': 'Drag the corner to resize',
+  'reader.noteFontSmaller': 'Smaller text',
+  'reader.noteFontLarger': 'Larger text',
   'reader.writeNote': "Add note",
   'reader.notePlaceholder': 'Write down your thoughts…',
   'reader.deleteHighlight': "Delete highlight",

@@ -851,6 +851,8 @@ export default {
   'reader.markedUnderline': '已加下划线',
   'reader.markedStrikeout': '已加删除线',
   'reader.noteResize': '拖动右下角可调整大小',
+  'reader.noteFontSmaller': '缩小字号',
+  'reader.noteFontLarger': '放大字号',
   'reader.writeNote': '写想法',
   'reader.notePlaceholder': '写下这一刻的想法…',
   'reader.deleteHighlight': '删除划线',

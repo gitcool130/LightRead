@@ -191,6 +191,17 @@ try {
     .evaluate(e => getComputedStyle(e).backgroundColor)
   assert.notEqual(pinColorAfter, pinColorBefore, '气泡颜色应该能改')
 
+  // 8.66 卡片字号可放大
+  const fsBefore = await page
+    .locator('.note-card textarea')
+    .evaluate(e => getComputedStyle(e).fontSize)
+  await page.locator('.note-fs-btn', { hasText: 'A+' }).click()
+  await page.waitForTimeout(180)
+  const fsAfter = await page
+    .locator('.note-card textarea')
+    .evaluate(e => getComputedStyle(e).fontSize)
+  assert.notEqual(fsAfter, fsBefore, '卡片字号应该能放大')
+
   // 8.7 卡片带引线, 且能拖动
   assert.equal(await page.locator('.note-leader line').count(), 1, '笔记卡片应该有一条指向文字的引线')
   const cardBefore = await page.locator('.note-card').boundingBox()
