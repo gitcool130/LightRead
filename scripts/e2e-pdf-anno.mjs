@@ -296,6 +296,15 @@ try {
   await page.waitForTimeout(200)
   assert.equal(await page.locator('.p-note-leaders line').count(), 0, '移开后引线应消失')
 
+  // 12. PDF 顶栏的「背景音」按钮: 点开面板, 再收起
+  const ambientBtn = page.locator('.top-btn', { hasText: '背景音' }).first()
+  assert.equal(await ambientBtn.count(), 1, 'PDF 顶栏应有背景音按钮')
+  await ambientBtn.click()
+  await page.locator('.am-panel').waitFor()
+  await page.locator('.am-panel .am-icon-btn').last().click()
+  await page.waitForTimeout(200)
+  assert.equal(await page.locator('.am-panel').count(), 0, '背景音面板应该能收起')
+
   const shot = join(tmpdir(), 'lightread-pdf-anno.png')
   await page.screenshot({ path: shot })
 

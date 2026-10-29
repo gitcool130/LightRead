@@ -105,6 +105,8 @@ import { EDGE_VOICES, edgeAvailable, playAudio } from '../services/edgeTts'
 import { KOKORO_VOICES, DEFAULT_KOKORO_SID, kokoroVoiceLabel } from '../services/kokoroVoices'
 import { localPack, localTtsSynthesize, refreshLocalPack } from '../services/localTts'
 import LocalTtsPack from '../components/LocalTtsPack.vue'
+import AmbientPanel from '../components/AmbientPanel.vue'
+import { useAmbient } from '../services/ambient'
 import {
   dispatchPdfReaderShortcut,
   getPdfShortcutHelpRows,
@@ -4248,6 +4250,19 @@ watch(() => settings.autoReadSeconds, () => {
 
 /* ---- 听书 (Edge 在线 / 本地离线 / 系统语音) ---- */
 const ttsPanel = ref(false)
+/** 背景音面板: 与 EPUB 阅读器同一套全局单例 (services/ambient) */
+const ambientPanel = ref(false)
+const ambient = useAmbient()
+
+function toggleAmbientPanel() {
+  ambientPanel.value = !ambientPanel.value
+  if (ambientPanel.value) ttsPanel.value = false
+}
+
+async function showAmbientSources() {
+  const { openDownload } = await import('../services/updater')
+  openDownload('https://github.com/yzfly/LightRead/blob/main/docs/ambient-sources.md')
+}
 const ttsState = ref<'stopped' | 'playing' | 'paused'>('stopped')
 const ttsVoices = ref<{ name: string; lang: string }[]>([])
 let ttsSession = 0
@@ -4660,7 +4675,12 @@ onMounted(async () => {
   }
 })
 
+// 听书出声时压低背景音 (与 EPUB 阅读器一致)
+watch(ttsState, s => ambient.duck(s === 'playing'), { immediate: true })
+
 onBeforeUnmount(() => {
+  ambient.stop()
+  ambient.setPauseWhenHidden(null)
   document.removeEventListener('visibilitychange', resetAutoScrollClock)
   readerAlive = false
   reflowSession++
@@ -4864,6 +4884,17 @@ onBeforeUnmount(() => {
               <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" /><path d="M10.5 9l4.5 3-4.5 3z" /></svg>
               <span class="top-label">{{ autoReading ? t('reader.autoReading') : t('reader.autoRead') }}</span>
             </button>
+            <button
+              type="button"
+              class="top-btn reader-tool"
+              :class="{ active: ambientPanel || ambient.state.playing }"
+              :aria-pressed="ambientPanel || ambient.state.playing"
+              :title="t('ambient.title')"
+              @click="toggleAmbientPanel"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a1 1 0 0 1 1 1v16a1 1 0 1 1-2 0V4a1 1 0 0 1 1-1zM8 7a1 1 0 0 1 1 1v8a1 1 0 1 1-2 0V8a1 1 0 0 1 1-1zm8 0a1 1 0 0 1 1 1v8a1 1 0 1 1-2 0V8a1 1 0 0 1 1-1zM4 10a1 1 0 0 1 1 1v2a1 1 0 1 1-2 0v-2a1 1 0 0 1 1-1zm16 0a1 1 0 0 1 1 1v2a1 1 0 1 1-2 0v-2a1 1 0 0 1 1-1z" /></svg>
+              <span class="top-label">{{ t('ambient.title') }}</span>
+            </button>
           </template>
           <span class="topbar-sep" aria-hidden="true" />
           <button
@@ -4935,6 +4966,10 @@ onBeforeUnmount(() => {
                 <button type="button" role="menuitem" @click="runFromToolbarPopover(toggleAutoPanel)">
                   <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" /><path d="M10.5 9l4.5 3-4.5 3z" /></svg>
                   <span>{{ autoReading ? t('reader.autoReading') : t('reader.autoRead') }}</span>
+                </button>
+                <button type="button" role="menuitem" @click="runFromToolbarPopover(toggleAmbientPanel)">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a1 1 0 0 1 1 1v16a1 1 0 1 1-2 0V4a1 1 0 0 1 1-1zM8 7a1 1 0 0 1 1 1v8a1 1 0 1 1-2 0V8a1 1 0 0 1 1-1zm8 0a1 1 0 0 1 1 1v8a1 1 0 1 1-2 0V8a1 1 0 0 1 1-1zM4 10a1 1 0 0 1 1 1v2a1 1 0 1 1-2 0v-2a1 1 0 0 1 1-1zm16 0a1 1 0 0 1 1 1v2a1 1 0 1 1-2 0v-2a1 1 0 0 1 1-1z" /></svg>
+                  <span>{{ t('ambient.title') }}</span>
                 </button>
                 <span class="top-menu-div" role="separator" />
               </template>
@@ -6098,6 +6133,14 @@ onBeforeUnmount(() => {
       ↩ {{ t('paper.jumpBack') }}
     </button>
 
+    <!-- 背景音面板 -->
+    <AmbientPanel
+      v-if="ambientPanel"
+      :tts-active="ttsState === 'playing'"
+      @close="ambientPanel = false"
+      @show-sources="showAmbientSources"
+    />
+
     <!-- 听书控制条 (藏书 PDF) -->
     <div v-if="ttsPanel" class="tts-panel card">
       <div class="tts-row">
@@ -6201,6 +6244,7 @@ onBeforeUnmount(() => {
   line-height: 1.6;
 }
 .paper {
+  position: relative;
   height: 100%;
   display: flex;
   flex-direction: column;
