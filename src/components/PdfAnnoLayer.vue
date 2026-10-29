@@ -8,7 +8,7 @@
  */
 import { computed, nextTick, ref, watch } from 'vue'
 import {
-  annoBounds, arrowHeadPoints, inkPathD,
+  annoBounds, arcPathD, arrowHeadPoints, inkPathD,
   type DrawAnno, type NoteAnno,
 } from '../services/pdfAnno'
 
@@ -154,6 +154,15 @@ const onEditKeydown = (e: KeyboardEvent) => {
             :opacity="it.d.a"
           />
         </g>
+        <path
+          v-else-if="it.d.t === 'arc'"
+          :d="arcPathD(it.d)"
+          :stroke="it.d.c"
+          :stroke-width="strokeWidth(it.d)"
+          :opacity="it.d.a"
+          fill="none"
+          stroke-linecap="round"
+        />
         <line
           v-else-if="it.d.t === 'line'"
           :x1="it.d.x1"
@@ -219,6 +228,15 @@ const onEditKeydown = (e: KeyboardEvent) => {
             :opacity="draftVector.a"
           />
         </template>
+        <path
+          v-else-if="draftVector.t === 'arc'"
+          :d="arcPathD(draftVector)"
+          :stroke="draftVector.c"
+          :stroke-width="draftVector.w"
+          :opacity="draftVector.a"
+          fill="none"
+          stroke-linecap="round"
+        />
         <line
           v-else-if="draftVector.t === 'line'"
           :x1="draftVector.x1"

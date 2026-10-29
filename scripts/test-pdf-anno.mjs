@@ -6,6 +6,9 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   ANNO_COLORS,
+  arcCircle,
+  arcPathD,
+  arcPoints,
   ANNO_COLOR_NAMES,
   ANNO_DEFAULT_COLOR,
   ANNO_PREFIX,
@@ -198,4 +201,62 @@ test('调色板: 9 色齐全 (含亮绿 / 红 / 亮橙), 名字互不重复, 默
   // 名字 → i18n key; 调色板外的老颜色直接回显色值
   assert.equal(annoColorName('#22c55e'), 'reader.annoColorName.BrightGreen')
   assert.equal(annoColorName('#e5484d'), '#e5484d')
+})
+
+test('圆弧: 默认顺时针, cw 只在逆时针时才写进 cfi', () => {
+  const cw = { t: 'arc', p: 2, x1: 100, y1: 400, x2: 300, y2: 400, w: 2, c: '#f5222d', a: 1, cw: true }
+  const cfi = encodeDraw(cw)
+  assert.ok(!cfi.includes('"cw"'), '顺时针是默认值, 不必写进数据')
+  const back = decodeDraw(cfi)
+  assert.equal(back.t, 'arc')
+  assert.equal(back.cw, true)
+
+  const ccw = { ...cw, cw: false }
+  const cfi2 = encodeDraw(ccw)
+  assert.ok(cfi2.includes('"cw":0'))
+  assert.equal(decodeDraw(cfi2).cw, false)
+
+  // 老数据没有 cw 字段 → 按顺时针
+  const legacy = decodeDraw('a:1:{"t":"arc","p":1,"x1":0,"y1":0,"x2":10,"y2":0,"w":2,"c":"#000","a":1}')
+  assert.equal(legacy.cw, true)
+})
+
+test('圆弧: 弦一样长时, 顺时针与逆时针鼓向相反一侧', () => {
+  const base = { t: 'arc', p: 1, x1: 100, y1: 400, x2: 300, y2: 400, w: 2, c: '#000', a: 1 }
+  const cwPts = arcPoints({ ...base, cw: true })
+  const ccwPts = arcPoints({ ...base, cw: false })
+  const mid = pts => pts[Math.floor(pts.length / 2)]
+  assert.ok(Math.abs(cwPts[0][0] - 100) < 0.01, '采样第一个点就是起点')
+  assert.ok(Math.abs(cwPts[cwPts.length - 1][0] - 300) < 0.01, '采样最后一个点就是终点')
+  // 弦在 y=400, 弧鼓出去的那一侧一个在上一在下
+  assert.ok(mid(cwPts)[1] < 400, '顺时针应该鼓到弦上方')
+  assert.ok(mid(ccwPts)[1] > 400, '逆时针应该鼓到弦下方')
+  // 半径按弦长的 0.75 取: 矢高 = r - sqrt(r²-(c/2)²) ≈ 0.19 弦长
+  const bulge = Math.abs(400 - mid(cwPts)[1])
+  assert.ok(bulge > 30 && bulge < 45, `鼓出高度异常: ${bulge}`)
+})
+
+test('圆弧: 包围盒要包住鼓出来的那一截, 命中按弧线走', () => {
+  const a = { t: 'arc', p: 1, x1: 100, y1: 400, x2: 300, y2: 400, w: 2, c: '#000', a: 1, cw: true }
+  const b = annoBounds(a)
+  assert.ok(b.y < 400 - 30, '包围盒上边要到弦上方')
+  assert.ok(b.x <= 100 && b.x + b.w >= 300)
+
+  const onArc = arcPoints(a)[Math.floor(arcPoints(a).length / 2)]
+  assert.equal(hitTest(a, onArc[0], onArc[1], 3), true, '弧上的点应该命中')
+  assert.equal(hitTest(a, 200, 400, 3), false, '弦中点不在弧上, 不该命中')
+
+  // 起点终点重合 → 退化直线, 不炸
+  const dot = { ...a, x2: a.x1, y2: a.y1 }
+  assert.equal(arcCircle(dot), null)
+  assert.ok(arcPathD(dot).startsWith('M'))
+})
+
+test('圆弧: 拖拽生成默认顺时针, 平移两个端点一起走', () => {
+  const a = annoFromDrag('arc', 3, { x: 10, y: 10 }, { x: 60, y: 40 }, 2, '#000', 1)
+  assert.equal(a.t, 'arc')
+  assert.equal(a.cw, true)
+  const moved = moveAnno(a, 5, -5)
+  assert.deepEqual([moved.x1, moved.y1, moved.x2, moved.y2], [15, 5, 65, 35])
+  assert.equal(arcPathD(a).split('A').length, 2, 'path 里应该有一条 A 弧命令')
 })

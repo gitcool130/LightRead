@@ -11,10 +11,10 @@
  * 参考实现: PDF-Annotator-Qt (PyMuPDF + QGraphicsScene) 的 SHAPE_ITEMS 与绘制流程。
  */
 
-export type AnnoTool = 'select' | 'pen' | 'marker' | 'rect' | 'ellipse' | 'line' | 'arrow' | 'note'
+export type AnnoTool = 'select' | 'pen' | 'marker' | 'rect' | 'ellipse' | 'line' | 'arc' | 'arrow' | 'note'
 
 /** 真正「画东西」的工具 (select 只是选择态) */
-export const DRAW_TOOLS: AnnoTool[] = ['pen', 'marker', 'rect', 'ellipse', 'line', 'arrow', 'note']
+export const DRAW_TOOLS: AnnoTool[] = ['pen', 'marker', 'rect', 'ellipse', 'line', 'arc', 'arrow', 'note']
 
 export interface Pt {
   x: number
@@ -35,9 +35,9 @@ export interface InkAnno {
   a: number
 }
 
-/** 直线 / 箭头 */
+/** 直线 / 箭头 / 圆弧 */
 export interface SegAnno {
-  t: 'line' | 'arrow'
+  t: 'line' | 'arrow' | 'arc'
   p: number
   x1: number
   y1: number
@@ -46,6 +46,8 @@ export interface SegAnno {
   w: number
   c: string
   a: number
+  /** 仅 arc: true 顺时针 (默认), false 逆时针 (按住 Shift 画) */
+  cw?: boolean
 }
 
 /** 矩形 / 椭圆 */
@@ -123,6 +125,7 @@ export const ANNO_DEFAULT_WIDTH: Record<AnnoTool, number> = {
   rect: 2,
   ellipse: 2,
   line: 2,
+  arc: 2,
   arrow: 2,
   note: 0,
 }
@@ -140,7 +143,7 @@ export const isDrawLoc = (cfi: string) => typeof cfi === 'string' && cfi.startsW
 export const annoKindOf = (a: DrawAnno): 'ink' | 'shape' | 'text' =>
   a.t === 'ink' ? 'ink' : a.t === 'note' ? 'text' : 'shape'
 
-const DRAW_TYPES: DrawAnno['t'][] = ['ink', 'line', 'arrow', 'rect', 'ellipse', 'note']
+const DRAW_TYPES: DrawAnno['t'][] = ['ink', 'line', 'arrow', 'arc', 'rect', 'ellipse', 'note']
 
 const num = (v: unknown, fallback = 0) => (typeof v === 'number' && Number.isFinite(v) ? v : fallback)
 
@@ -162,6 +165,8 @@ export function encodeDraw(a: DrawAnno): string {
       t: a.t, p: a.p, x1: r1(a.x1), y1: r1(a.y1), x2: r1(a.x2), y2: r1(a.y2),
       w: r1(a.w), c: a.c, a: r1(a.a),
     }
+    // 圆弧的方向只在逆时针时才写 (顺时针是默认值, 老数据没这个字段也按顺时针)
+    if (a.t === 'arc' && a.cw === false) body.cw = 0
   }
   return ANNO_PREFIX + JSON.stringify(body)
 }
@@ -199,11 +204,13 @@ export function decodeDraw(cfi: string): DrawAnno | null {
       c: color, s: Math.max(6, num(raw.s, NOTE_BOX.s)),
     }
   }
-  return {
+  const seg = {
     t: t as SegAnno['t'] | BoxAnno['t'], p,
     x1: num(raw.x1), y1: num(raw.y1), x2: num(raw.x2), y2: num(raw.y2),
     w: Math.max(0.5, num(raw.w, 2)), c: color, a: clamp01(num(raw.a, 1)),
   }
+  // arc 默认顺时针; 只有明确写了 cw: 0 才是逆时针
+  return t === 'arc' ? { ...seg, t: 'arc', cw: num(raw.cw, 1) !== 0 } : seg
 }
 
 const clamp01 = (v: number) => Math.min(1, Math.max(0.05, v))
@@ -231,11 +238,26 @@ export function annoBounds(a: DrawAnno): AnnoBounds {
     const pad = a.w / 2
     return { x: x0 - pad, y: y0 - pad, w: x1 - x0 + pad * 2, h: y1 - y0 + pad * 2 }
   }
+  const pad = a.w / 2
+  if (a.t === 'arc') {
+    // 弧可能鼓出弦的包围盒, 按采样点算
+    let x0 = Infinity
+    let y0 = Infinity
+    let x1 = -Infinity
+    let y1 = -Infinity
+    for (const [x, y] of arcPoints(a)) {
+      if (x < x0) x0 = x
+      if (y < y0) y0 = y
+      if (x > x1) x1 = x
+      if (y > y1) y1 = y
+    }
+    if (!Number.isFinite(x0)) return { x: a.x1, y: a.y1, w: 0, h: 0 }
+    return { x: x0 - pad, y: y0 - pad, w: x1 - x0 + pad * 2, h: y1 - y0 + pad * 2 }
+  }
   const x = Math.min(a.x1, a.x2)
   const y = Math.min(a.y1, a.y2)
   const w = Math.abs(a.x2 - a.x1)
   const h = Math.abs(a.y2 - a.y1)
-  const pad = a.w / 2
   return { x: x - pad, y: y - pad, w: w + pad * 2, h: h + pad * 2 }
 }
 
@@ -299,6 +321,16 @@ export function hitTest(a: DrawAnno, x: number, y: number, tol = 4): boolean {
     const t = Math.max(tol, a.w / 2 + 1)
     return segDist2(x, y, a.x1, a.y1, a.x2, a.y2) <= t * t
   }
+  if (a.t === 'arc') {
+    const t = Math.max(tol, a.w / 2 + 1)
+    const pts = arcPoints(a)
+    for (let i = 1; i < pts.length; i++) {
+      const [ax, ay] = pts[i - 1]
+      const [bx, by] = pts[i]
+      if (segDist2(x, y, ax, ay, bx, by) <= t * t) return true
+    }
+    return false
+  }
   const b = annoBounds(a)
   return x >= b.x - tol && x <= b.x + b.w + tol && y >= b.y - tol && y <= b.y + b.h + tol
 }
@@ -333,6 +365,58 @@ export function arrowHeadPoints(x1: number, y1: number, x2: number, y2: number, 
   return `${r1(x2)},${r1(y2)} ${r1(ax)},${r1(ay)} ${r1(bx)},${r1(by)}`
 }
 
+/**
+ * 圆弧的圆心与半径: 拖拽两点是弦, 半径取弦长的 0.75 倍 (弧约 84°, 看得清又不夸张)。
+ * 顺时针 (sweep=1) 时圆心落在弦的顺时针一侧, 逆时针反之; 圆心决定弧凸向哪边。
+ */
+export function arcCircle(a: SegAnno): { cx: number; cy: number; r: number } | null {
+  const dx = a.x2 - a.x1
+  const dy = a.y2 - a.y1
+  const len = Math.hypot(dx, dy)
+  if (len < 0.01) return null
+  const r = Math.max(len / 2, len * 0.75)
+  const mx = (a.x1 + a.x2) / 2
+  const my = (a.y1 + a.y2) / 2
+  const h = Math.sqrt(Math.max(0, r * r - (len / 2) ** 2))
+  // (-dy, dx) 是弦方向在 y 向下坐标系里顺时针 90° 的单位向量
+  const side = a.cw === false ? -1 : 1
+  const nx = (-dy / len) * side
+  const ny = (dx / len) * side
+  return { cx: mx + nx * h, cy: my + ny * h, r }
+}
+
+/** 圆弧上的采样点 (命中判定与包围盒用), 顺时针按角度递增走 */
+export function arcPoints(a: SegAnno, steps = 24): [number, number][] {
+  const c = arcCircle(a)
+  if (!c) return [[a.x1, a.y1], [a.x2, a.y2]]
+  const a1 = Math.atan2(a.y1 - c.cy, a.x1 - c.cx)
+  const a2 = Math.atan2(a.y2 - c.cy, a.x2 - c.cx)
+  const cw = a.cw !== false
+  // y 向下: 角度递增 = 屏幕上顺时针
+  let sweep = a2 - a1
+  if (cw) {
+    while (sweep <= 0) sweep += Math.PI * 2
+    while (sweep > Math.PI * 2) sweep -= Math.PI * 2
+  } else {
+    while (sweep >= 0) sweep -= Math.PI * 2
+    while (sweep < -Math.PI * 2) sweep += Math.PI * 2
+  }
+  const out: [number, number][] = []
+  for (let i = 0; i <= steps; i++) {
+    const t = a1 + (sweep * i) / steps
+    out.push([c.cx + c.r * Math.cos(t), c.cy + c.r * Math.sin(t)])
+  }
+  return out
+}
+
+/** 圆弧 → SVG path; sweep-flag 1 = 屏幕上顺时针 */
+export function arcPathD(a: SegAnno): string {
+  const c = arcCircle(a)
+  if (!c) return `M${r1(a.x1)} ${r1(a.y1)}L${r1(a.x2)} ${r1(a.y2)}`
+  const sweep = a.cw === false ? 0 : 1
+  return `M${r1(a.x1)} ${r1(a.y1)}A${r1(c.r)} ${r1(c.r)} 0 0 ${sweep} ${r1(a.x2)} ${r1(a.y2)}`
+}
+
 /** 采样点抽稀: 屏幕距离小于 minDist(页坐标) 的点丢掉, 免得一条笔迹存上百个点 */
 export function simplifyInk(pts: [number, number][], minDist: number): [number, number][] {
   if (pts.length < 3 || minDist <= 0) return pts
@@ -359,8 +443,9 @@ export function annoFromDrag(tool: AnnoTool, page: number, from: Pt, to: Pt, w: 
   if (tool === 'pen' || tool === 'marker') {
     return { t: 'ink', p: page, pts: [[from.x, from.y]], w, c, a: alpha }
   }
-  if (tool === 'line' || tool === 'arrow') {
-    return { t: tool, p: page, x1: from.x, y1: from.y, x2: to.x, y2: to.y, w, c, a: alpha }
+  if (tool === 'line' || tool === 'arrow' || tool === 'arc') {
+    const seg: SegAnno = { t: tool, p: page, x1: from.x, y1: from.y, x2: to.x, y2: to.y, w, c, a: alpha }
+    return tool === 'arc' ? { ...seg, t: 'arc', cw: true } : seg
   }
   if (tool === 'rect' || tool === 'ellipse') {
     return { t: tool, p: page, x1: from.x, y1: from.y, x2: to.x, y2: to.y, w, c, a: alpha }

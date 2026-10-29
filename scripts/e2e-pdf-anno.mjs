@@ -68,6 +68,9 @@ try {
     await page.waitForTimeout(120)
   }
 
+  const vectorCount = () => page.locator('.anno-layer svg > g:not(.anno-draft)').count()
+  const filledRects = () => page.locator('.p-hl-rect.p-hl-marker').count()
+
   const pickTool = async (label) => {
     await page.locator(`.anno-tray .anno-tool[title="${label}"]`).click()
     await page.waitForTimeout(80)
@@ -82,7 +85,7 @@ try {
 
   // 0. 工具条上每个图形工具都要带中文名 (光图标分不清矩形/椭圆/直线/箭头)
   const toolLabels = (await page.locator('.anno-tray .anno-tool').allInnerTexts()).map(t => t.trim())
-  for (const label of ['选择', '画笔', '荧光笔', '矩形', '椭圆', '直线', '箭头', '文字']) {
+  for (const label of ['选择', '画笔', '荧光笔', '矩形', '椭圆', '直线', '圆弧', '箭头', '文字']) {
     assert.ok(toolLabels.includes(label), `工具条里应该有「${label}」`)
   }
 
@@ -107,9 +110,13 @@ try {
     '画笔应该用下拉里选中的亮绿',
   )
 
-  // 2. 荧光笔: 横着刷一道 (半透明, 走 multiply 混合)
+  // 2. 荧光笔: 拖过文字 → 整段铺色 (写成一条文字高亮, 不再画自由笔迹)
+  assert.equal(await filledRects(), 0, '起手时页面上没有铺色')
   await pickTool('荧光笔')
   await stroke([at(0.2, 0.28), at(0.5, 0.28), at(0.7, 0.29)])
+  await page.waitForTimeout(260)
+  assert.ok(await filledRects() >= 1, '荧光笔应该把拖过的文字整段铺色')
+  assert.equal(await vectorCount(), 1, '荧光笔不再落自由笔迹')
 
   // 3. 矩形
   await pickTool('矩形')
@@ -127,8 +134,20 @@ try {
   await pickTool('箭头')
   await stroke([at(0.55, 0.5), at(0.8, 0.58)])
 
-  const vectorCount = () => page.locator('.anno-layer svg > g:not(.anno-draft)').count()
-  assert.equal(await vectorCount(), 6, '六种绘图批注应该都落在页面上')
+  assert.equal(await vectorCount(), 5, '画笔与四种形状应该都落在页面上')
+
+  // 6.5 圆弧: 默认顺时针; 按住 Shift 画逆时针
+  await pickTool('圆弧')
+  await stroke([at(0.2, 0.62), at(0.5, 0.62)])
+  await page.keyboard.down('Shift')
+  await stroke([at(0.55, 0.62), at(0.85, 0.62)])
+  await page.keyboard.up('Shift')
+  const arcPaths = await page.locator('.anno-layer svg path[stroke]').evaluateAll(els =>
+    els.map(el => el.getAttribute('d') || '').filter(d => d.includes('A')))
+  assert.equal(arcPaths.length, 2, '应该画了两条圆弧')
+  assert.ok(arcPaths[0].includes(' 0 0 1 '), `默认应顺时针 (sweep=1): ${arcPaths[0]}`)
+  assert.ok(arcPaths[1].includes(' 0 0 0 '), `按住 Shift 应逆时针 (sweep=0): ${arcPaths[1]}`)
+  assert.equal(await vectorCount(), 7, '加上两条圆弧共七条绘图批注')
 
   // 7. 文字框: 点一下落框, 直接输入, 点别处保存
   await pickTool('文字')
@@ -156,7 +175,7 @@ try {
   assert.notEqual(afterCfi, beforeCfi, '拖动应该移动批注')
   await page.keyboard.press('Delete')
   await page.waitForTimeout(300)
-  assert.equal(await vectorCount(), 5, '删除后应该只剩五条绘图批注')
+  assert.equal(await vectorCount(), 6, '删除后应该只剩六条绘图批注')
 
   await page.keyboard.press('Escape')
   await page.waitForTimeout(200)
@@ -191,7 +210,9 @@ try {
   assert.equal(await page.locator('.p-note-pin').count(), 1, '写想法后页面上应出现笔记气泡')
   const visibleFills = await page.evaluate(() =>
     [...document.querySelectorAll('.p-hl-rect')].filter(
-      e => !e.classList.contains('p-hl-line') && getComputedStyle(e).display !== 'none',
+      e => !e.classList.contains('p-hl-line')
+        && !e.classList.contains('p-hl-marker')
+        && getComputedStyle(e).display !== 'none',
     ).length)
   assert.equal(visibleFills, 0, '文本注释不应该给文字铺高亮')
   await page.locator('.p-note-pin').first().click()
@@ -282,7 +303,8 @@ try {
   await page.reload()
   await page.locator('.p-holder canvas').first().waitFor()
   await page.waitForTimeout(800)
-  assert.equal(await vectorCount(), 5, '刷新后绘图批注应该从存储里恢复')
+  assert.equal(await vectorCount(), 6, '刷新后绘图批注应该从存储里恢复')
+  assert.ok(await filledRects() >= 1, '刷新后荧光笔铺色也应该还在')
   assert.equal(await page.locator('.anno-text-box').count(), 1, '刷新后文字批注也应该还在')
   assert.match(await page.locator('.anno-text-box').first().innerText(), /论证/)
   assert.equal(await page.locator('.p-hl-rect.p-hl-line').count(), 2, '刷新后下划线与删除线也应该还在')
@@ -309,7 +331,7 @@ try {
   await page.locator('.drawer-tabs button', { hasText: '划线想法' }).click()
   await page.waitForTimeout(200)
   const items = await page.locator('.drawer-body .anno-item').count()
-  assert.equal(items, 9, '抽屉里应有 5 条绘图批注 + 1 条文字批注 + 2 条文字标记 + 1 条想法')
+  assert.equal(items, 11, '抽屉里应有 6 条绘图批注 + 1 条文字批注 + 荧光铺色 + 2 条文字标记 + 1 条想法')
 
   // 11. 换成滚动模式: 同一套页内坐标, 批注要跟着页面走
   await page.locator('.drawer-head button[title="关闭"]').click()
@@ -317,7 +339,7 @@ try {
   await page.locator('.view-choice', { hasText: '滚动' }).first().click()
   await page.waitForTimeout(1200)
   assert.ok(await page.locator('.pane-left .p-holder').count() >= 1, '滚动模式没有渲染页面')
-  assert.equal(await vectorCount(), 5, '滚动模式下绘图批注也应该画出来')
+  assert.equal(await vectorCount(), 6, '滚动模式下绘图批注也应该画出来')
   assert.equal(await page.locator('.anno-text-box').count(), 1, '滚动模式下文字批注也应该画出来')
 
   assert.deepEqual(errors, [], `页面报错: ${errors.join(' / ')}`)

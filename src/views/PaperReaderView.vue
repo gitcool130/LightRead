@@ -1833,8 +1833,23 @@ const markStyle = (page: number, r: HlRect, a: AnnotationRec) => {
 }
 
 /** 下划线 / 删除线是实色线条, 不吃高亮的半透明与正片叠底 */
-const markClass = (a: AnnotationRec) =>
-  a.kind === 'underline' || a.kind === 'strikeout' ? 'p-hl-line' : ''
+/** 荧光笔的文字铺色预览: 和高亮同一套页内矩形, 颜色取当前画笔色 */
+const annoMarkStyle = (page: number, r: HlRect) => {
+  const display = displaySizeOf(page)
+  return {
+    left: `${r.x * display.sx}px`,
+    top: `${r.y * display.sy}px`,
+    width: `${r.w * display.sx}px`,
+    height: `${r.h * display.sy}px`,
+    background: annoColor.value,
+  }
+}
+
+const markClass = (a: AnnotationRec) => {
+  if (a.kind === 'underline' || a.kind === 'strikeout') return 'p-hl-line'
+  if (a.kind === 'marker') return 'p-hl-marker'
+  return ''
+}
 
 /* ================= 绘图批注: 画笔 / 荧光笔 / 矩形 / 椭圆 / 直线 / 箭头 / 文字 =================
  * 手感与工具集借鉴 PDF-Annotator-Qt: 拖选文字高亮、自由笔迹 (含荧光笔)、形状标注、
@@ -1858,6 +1873,7 @@ const ANNO_TOOL_LIST: AnnoToolSpec[] = [
   { id: 'rect', label: 'reader.annoRect', paths: ['M4 5.5h16v13H4z'] },
   { id: 'ellipse', label: 'reader.annoEllipse', paths: ['M12 5c4.4 0 8 3.1 8 7s-3.6 7-8 7-8-3.1-8-7 3.6-7 8-7z'] },
   { id: 'line', label: 'reader.annoLine', paths: ['M5 19L19 5'] },
+  { id: 'arc', label: 'reader.annoArc', paths: ['M3.6 18A9.4 9.4 0 0 1 20.4 10'] },
   { id: 'arrow', label: 'reader.annoArrow', paths: ['M5 19L19 5', 'M19 5h-5.2M19 5v5.2'] },
   { id: 'note', label: 'reader.annoNote', paths: ['M4.5 5.5h15v13h-15z', 'M8 10h8M8 13h8M8 16h4.5'] },
 ]
@@ -1870,6 +1886,10 @@ const annoColorLabel = computed(() => t(annoColorName(annoColor.value)))
 /** 线宽按屏幕 px 调, 落到页坐标时按当前缩放折回去, 手感不随缩放漂移 */
 const annoWidthPx = ref(ANNO_DEFAULT_WIDTH.pen)
 const annoDraft = ref<DrawAnno | null>(null)
+/** 荧光笔: 拖过文字时的整段铺色预览 */
+const markerPreview = ref<{ page: number; a: number; b: number; rects: HlRect[] } | null>(null)
+/** 荧光笔走文字选区时的拖拽状态 (起笔处的字符边界索引) */
+let annoTextDrag: { page: number; anchor: number } | null = null
 const annoSelected = ref<{ id: string; d: DrawAnno } | null>(null)
 const annoEditingId = ref('')
 const annoEditingText = ref('')
@@ -1878,6 +1898,8 @@ const annoActive = computed(() => annoTool.value !== 'none')
 const annoHint = computed(() => {
   if (annoTool.value === 'select') return t('reader.annoHintSelect')
   if (annoTool.value === 'note') return t('reader.annoHintNote')
+  if (annoTool.value === 'arc') return t('reader.annoHintArc')
+  if (annoTool.value === 'marker') return t('reader.annoHintMarker')
   return t('reader.annoHintDraw')
 })
 
@@ -2101,10 +2123,64 @@ function onAnnoPointerDown(e: PointerEvent, page: number) {
     return
   }
 
+  if (tool === 'marker' && pdm && pdm.text(page - 1).count > 0) {
+    // 荧光笔 = 文字荧光: 从文字上起笔, 就把拖过的文字整段铺色
+    const anchor = boundaryAt(page, e.clientX, e.clientY)
+    if (anchor >= 0) {
+      annoTextDrag = { page, anchor }
+      markerPreview.value = null
+      window.addEventListener('pointermove', onAnnoTextMove)
+      window.addEventListener('pointerup', onAnnoTextUp, { once: true })
+      return
+    }
+    // 没压在文字上 (图片 / 空白处) → 退回手绘笔迹
+  }
+
   annoDrag = { page, tool, start: pt, last: pt, moved: false }
   annoDraft.value = annoFromDrag(tool, page, pt, pt, annoWidthOf(page), annoColor.value, annoAlpha(tool))
+  // 圆弧默认顺时针, 起笔时按着 Shift 就是逆时针
+  if (annoDraft.value.t === 'arc') annoDraft.value = { ...annoDraft.value, cw: !e.shiftKey }
   window.addEventListener('pointermove', onAnnoMove)
   window.addEventListener('pointerup', onAnnoUp, { once: true })
+}
+
+/** 荧光笔: 拖动时把所选文字铺成色块预览 */
+function onAnnoTextMove(e: PointerEvent) {
+  const drag = annoTextDrag
+  if (!drag || !pdm) return
+  e.preventDefault()
+  const cur = boundaryAt(drag.page, e.clientX, e.clientY, true)
+  if (cur < 0) return
+  const a = Math.min(drag.anchor, cur)
+  const b = Math.max(drag.anchor, cur)
+  if (b <= a) {
+    markerPreview.value = null
+    return
+  }
+  markerPreview.value = { page: drag.page, a, b, rects: rangeRects(pdm.text(drag.page - 1), a, b) }
+}
+
+/** 荧光笔: 松手把整段文字写成一条高亮批注 */
+async function onAnnoTextUp() {
+  window.removeEventListener('pointermove', onAnnoTextMove)
+  const drag = annoTextDrag
+  const preview = markerPreview.value
+  annoTextDrag = null
+  markerPreview.value = null
+  if (!drag || !preview || !pdm || !preview.rects.length) return
+  const text = rangeText(pdm.text(drag.page - 1), preview.a, preview.b).replace(/\s+/g, ' ').trim()
+  if (!text) return
+  const storage = await getStorage()
+  const rec: Omit<AnnotationRec, 'id'> = {
+    bookId,
+    kind: 'marker',
+    color: annoColor.value,
+    cfi: encodeLoc(drag.page, preview.rects),
+    text: text.slice(0, 500),
+    createdAt: Date.now(),
+  }
+  const id = await storage.addAnnotation(rec)
+  annotations.value.push({ ...rec, id })
 }
 
 function onAnnoMove(e: PointerEvent) {
@@ -2134,6 +2210,8 @@ function onAnnoMove(e: PointerEvent) {
   drag.last = pt
   if (draft.t === 'ink') {
     annoDraft.value = inkAppend(draft, pt.x, pt.y, annoWidthOf(drag.page) * 0.35 + 0.4)
+  } else if (draft.t === 'arc') {
+    annoDraft.value = { ...draft, x2: pt.x, y2: pt.y, cw: !e.shiftKey }
   } else if (draft.t !== 'note') {
     annoDraft.value = { ...draft, x2: pt.x, y2: pt.y }
   }
@@ -2169,6 +2247,9 @@ async function onAnnoUp() {
 /** 取消正在进行的绘制 / 移动 (Esc) */
 function cancelAnnoDrag() {
   window.removeEventListener('pointermove', onAnnoMove)
+  window.removeEventListener('pointermove', onAnnoTextMove)
+  annoTextDrag = null
+  markerPreview.value = null
   const drag = annoDrag
   annoDrag = null
   annoDraft.value = null
@@ -2201,6 +2282,7 @@ function annoTypeLabel(d: DrawAnno): string {
   if (d.t === 'rect') return t('reader.annoRect')
   if (d.t === 'ellipse') return t('reader.annoEllipse')
   if (d.t === 'line') return t('reader.annoLine')
+  if (d.t === 'arc') return t('reader.annoArc')
   return t('reader.annoArrow')
 }
 
@@ -2211,7 +2293,7 @@ function handleAnnoKey(e: KeyboardEvent): boolean {
       annoColorOpen.value = false
       return true
     }
-    if (annoDrag) {
+    if (annoDrag || annoTextDrag) {
       cancelAnnoDrag()
       return true
     }
@@ -5491,6 +5573,14 @@ onBeforeUnmount(() => {
                   :style="pdfSearchRectStyle(n, match.rect)"
                 />
               </div>
+              <div v-if="markerPreview && markerPreview.page === n" class="p-hl">
+                <div
+                  v-for="(r, i) in markerPreview.rects"
+                  :key="`mk${i}`"
+                  class="p-hl-rect p-hl-marker"
+                  :style="annoMarkStyle(n, r)"
+                />
+              </div>
               <div class="p-hl">
                 <div v-for="h in pageHls.get(n) ?? []" :key="h.key" :class="['p-hl-rect', markClass(h.a)]" :style="markStyle(n, h.r, h.a)" />
               </div>
@@ -5590,6 +5680,14 @@ onBeforeUnmount(() => {
                   class="p-search-rect"
                   :class="{ active: match.active }"
                   :style="pdfSearchRectStyle(n, match.rect)"
+                />
+              </div>
+              <div v-if="markerPreview && markerPreview.page === n" class="p-hl">
+                <div
+                  v-for="(r, i) in markerPreview.rects"
+                  :key="`mk${i}`"
+                  class="p-hl-rect p-hl-marker"
+                  :style="annoMarkStyle(n, r)"
                 />
               </div>
               <div class="p-hl">
@@ -7306,6 +7404,11 @@ onBeforeUnmount(() => {
 }
 
 /* 下划线 / 删除线: 实色线条, 不透明度与混合模式回到普通 */
+/* 荧光笔铺色: 整段文字填满, 比划线略透、圆角, 像真的刷过一遍 */
+.p-hl-rect.p-hl-marker {
+  opacity: 0.5;
+  border-radius: var(--radius-xs);
+}
 .p-hl-rect.p-hl-line {
   opacity: 1;
   mix-blend-mode: normal;

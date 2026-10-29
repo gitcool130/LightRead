@@ -43,7 +43,11 @@ export interface AnnotationRec {
    * ink: 画笔/荧光笔笔迹, shape: 矩形/椭圆/直线/箭头, text: 页面上放下的文字框 (PDF 绘图批注).
    * 后三者的几何信息存在 cfi 里 (`a:1:...`), 见 services/pdfAnno.ts。
    */
-  kind?: 'highlight' | 'underline' | 'strikeout' | 'note' | 'bookmark' | 'ink' | 'shape' | 'text'
+  /**
+   * highlight: 划线铺色; marker: 荧光笔铺色 (拖过文字整段填充); underline / strikeout: 下划线 / 删除线;
+   * note: 想法气泡; bookmark: 书签; ink / shape / text: 页面绘图批注 (见 services/pdfAnno.ts)
+   */
+  kind?: 'highlight' | 'marker' | 'underline' | 'strikeout' | 'note' | 'bookmark' | 'ink' | 'shape' | 'text'
   /** EPUB CFI; PDF 高亮为 `p:<page>:<rects>`, PDF 绘图批注为 `a:1:<json>` */
   cfi: string
   text: string
