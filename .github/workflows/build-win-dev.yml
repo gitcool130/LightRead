@@ -97,13 +97,29 @@ jobs:
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           Get-ChildItem out | Select-Object Name, Length | Format-Table -AutoSize
 
-      - name: 上传 Artifacts（成品只放这里，不进 Release）
+      # 用户要求：GitHub 上不保留任何编译成品。
+      # 这里的 artifact 只是「云端编译 → 传回本机」的临时中转：默认 1 天自动过期，
+      # 本机脚本取回后会立刻调 API 删掉，仓库里不会长期留二进制。
+      - name: 上传临时中转（成品取回后即删）
         uses: actions/upload-artifact@v4
         with:
           name: LightRead-Windows
           path: out/*
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 1
+
+      # 每次构建完顺手清掉往次遗留的产物，仓库里最多只存在本次这一个临时中转
+      - name: 清掉往次产物
+        if: ${{ always() }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $mine = "${{ github.run_id }}"
+          $ids = gh api "repos/${{ github.repository }}/actions/artifacts?per_page=100" --jq ".artifacts[] | select(.workflow_run.id != $mine) | .id"
+          foreach ($id in $ids) {
+            if ($id) { gh api -X DELETE "repos/${{ github.repository }}/actions/artifacts/$id" }
+          }
 
       # 用户要求：dev-latest 只保留源码，不放成品。
       # GitHub 会自动给每个 Release 附上 Source code (zip/tar.gz)，所以这里只要保证没有自定义附件即可。
