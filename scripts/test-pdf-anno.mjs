@@ -5,7 +5,11 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
+  ANNO_COLORS,
+  ANNO_COLOR_NAMES,
+  ANNO_DEFAULT_COLOR,
   ANNO_PREFIX,
+  annoColorName,
   annoBounds,
   annoFromDrag,
   annoKindOf,
@@ -177,4 +181,21 @@ test('画笔追加采样点: 太近的点丢掉, 拉开了就接上', () => {
   assert.deepEqual(next.pts[1], [5, 5])
   // 不改原对象
   assert.equal(a.pts.length, 1)
+})
+
+test('调色板: 9 色齐全 (含亮绿 / 红 / 亮橙), 名字互不重复, 默认色在板内', () => {
+  assert.equal(ANNO_COLORS.length, 9)
+  assert.equal(new Set(ANNO_COLORS).size, 9, '调色板不该有重复色')
+  for (const hex of ANNO_COLORS) {
+    assert.match(hex, /^#[0-9a-f]{6}$/)
+    assert.ok(ANNO_COLOR_NAMES[hex], `${hex} 应该有名字`)
+  }
+  // 用户点名要加的三种颜色
+  assert.ok(ANNO_COLORS.includes('#22c55e'), '应该有亮绿')
+  assert.ok(ANNO_COLORS.includes('#f5222d'), '应该有正红')
+  assert.ok(ANNO_COLORS.includes('#ff8a00'), '应该有亮橙')
+  assert.ok(ANNO_COLORS.includes(ANNO_DEFAULT_COLOR), '默认色要在调色板里')
+  // 名字 → i18n key; 调色板外的老颜色直接回显色值
+  assert.equal(annoColorName('#22c55e'), 'reader.annoColorName.BrightGreen')
+  assert.equal(annoColorName('#e5484d'), '#e5484d')
 })

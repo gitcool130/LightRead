@@ -86,8 +86,34 @@ export interface AnnoBounds {
 
 export const ANNO_PREFIX = 'a:1:'
 
-/** 工具栏预设颜色 (与划线高亮同色系, 便于统一视觉) */
-export const ANNO_COLORS = ['#e5484d', '#f2a63b', '#2f9e44', '#1c7ed6', '#7048e8', '#1d2129']
+/**
+ * 画笔调色板: 红 / 亮橙 / 橙 / 黄 / 亮绿 / 绿 / 蓝 / 紫 / 墨黑。
+ * 顺序即下拉菜单里的排布 (暖色在前、冷色在后、墨黑收尾), 亮色单独给了「亮橙」「亮绿」,
+ * 深色底稿上也能看清。
+ */
+export const ANNO_COLORS = ['#f5222d', '#ff8a00', '#f2a63b', '#ffd60a', '#22c55e', '#2f9e44', '#1c7ed6', '#7048e8', '#1d2129']
+
+/** 调色板颜色的名字 (i18n key 后缀: reader.annoColorName.<Name>), 只用于标题与下拉菜单 */
+export const ANNO_COLOR_NAMES: Record<string, string> = {
+  '#f5222d': 'Red',
+  '#ff8a00': 'BrightOrange',
+  '#f2a63b': 'Orange',
+  '#ffd60a': 'Yellow',
+  '#22c55e': 'BrightGreen',
+  '#2f9e44': 'Green',
+  '#1c7ed6': 'Blue',
+  '#7048e8': 'Purple',
+  '#1d2129': 'Ink',
+}
+
+/** 默认画笔颜色 (调色板里的正红) */
+export const ANNO_DEFAULT_COLOR = '#f5222d'
+
+/** 颜色的显示名; 老批注可能带调色板外的自定义色, 这时直接显示色值 */
+export function annoColorName(hex: string): string {
+  const name = ANNO_COLOR_NAMES[hex]
+  return name ? `reader.annoColorName.${name}` : hex
+}
 
 /** 各工具默认线宽 (屏幕 px, 写入时按当前缩放折成页坐标) */
 export const ANNO_DEFAULT_WIDTH: Record<AnnoTool, number> = {

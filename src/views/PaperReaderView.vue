@@ -27,10 +27,12 @@ import {
 import { initMupdf } from '../services/mupdf'
 import {
   ANNO_COLORS,
+  ANNO_DEFAULT_COLOR,
   ANNO_DEFAULT_WIDTH,
   ANNO_WIDTHS,
   NOTE_BOX,
   annoBounds,
+  annoColorName,
   annoFromDrag,
   annoKindOf,
   clampAnno,
@@ -1861,7 +1863,10 @@ const ANNO_TOOL_LIST: AnnoToolSpec[] = [
 ]
 
 const annoTool = ref<AnnoMode>('none')
-const annoColor = ref(ANNO_COLORS[0])
+const annoColor = ref(ANNO_DEFAULT_COLOR)
+/** 调色下拉是否展开 (颜色都收进这一个菜单里) */
+const annoColorOpen = ref(false)
+const annoColorLabel = computed(() => t(annoColorName(annoColor.value)))
 /** 线宽按屏幕 px 调, 落到页坐标时按当前缩放折回去, 手感不随缩放漂移 */
 const annoWidthPx = ref(ANNO_DEFAULT_WIDTH.pen)
 const annoDraft = ref<DrawAnno | null>(null)
@@ -1908,6 +1913,7 @@ const annoWidthMemory: Partial<Record<AnnoTool, number>> = {}
 
 function setAnnoTool(tool: AnnoMode) {
   void commitAnnoText()
+  annoColorOpen.value = false
   if (annoTool.value !== 'none') annoWidthMemory[annoTool.value] = annoWidthPx.value
   annoTool.value = annoTool.value === tool ? 'none' : tool
   const mode = annoTool.value
@@ -2201,6 +2207,10 @@ function annoTypeLabel(d: DrawAnno): string {
 /** Esc / Delete 优先处理批注, 其余按键交给阅读器快捷键 */
 function handleAnnoKey(e: KeyboardEvent): boolean {
   if (e.key === 'Escape') {
+    if (annoColorOpen.value) {
+      annoColorOpen.value = false
+      return true
+    }
     if (annoDrag) {
       cancelAnnoDrag()
       return true
@@ -5296,21 +5306,47 @@ onBeforeUnmount(() => {
               @click="setAnnoTool(tool.id)"
             >
               <svg viewBox="0 0 24 24" aria-hidden="true"><path v-for="(d, i) in tool.paths" :key="i" :d="d" /></svg>
+              <span class="anno-tool-label">{{ t(tool.label) }}</span>
             </button>
           </div>
           <span class="anno-tray-sep" />
-          <div class="anno-tray-row anno-tray-colors" role="group" :aria-label="t('reader.annoColor')">
+          <!-- 颜色收在一个下拉里: 触发器显示当前颜色, 展开是整块调色板 -->
+          <div class="anno-color-wrap">
             <button
-              v-for="hex in ANNO_COLORS"
-              :key="hex"
               type="button"
-              class="anno-color"
-              :class="{ active: annoColor === hex }"
-              :style="{ background: hex }"
-              :title="hex"
-              :aria-label="hex"
-              @click="pickAnnoColor(hex)"
-            />
+              class="anno-color-trigger"
+              :class="{ open: annoColorOpen }"
+              :title="`${t('reader.annoColor')} · ${annoColorLabel}`"
+              :aria-label="`${t('reader.annoColor')} · ${annoColorLabel}`"
+              aria-haspopup="menu"
+              :aria-expanded="annoColorOpen"
+              @click.stop="annoColorOpen = !annoColorOpen"
+            >
+              <span class="anno-color-dot" :style="{ background: annoColor }" />
+              <span class="anno-color-name">{{ annoColorLabel }}</span>
+              <svg class="anno-color-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
+            </button>
+            <div v-if="annoColorOpen" class="anno-color-backdrop" @click.stop="annoColorOpen = false" />
+            <div
+              v-if="annoColorOpen"
+              class="anno-palette card"
+              role="menu"
+              :aria-label="t('reader.annoColor')"
+            >
+              <button
+                v-for="hex in ANNO_COLORS"
+                :key="hex"
+                type="button"
+                role="menuitem"
+                class="anno-palette-item"
+                :class="{ active: annoColor === hex }"
+                :title="t(annoColorName(hex))"
+                @click="pickAnnoColor(hex); annoColorOpen = false"
+              >
+                <span class="anno-color-dot" :style="{ background: hex }" />
+                <span>{{ t(annoColorName(hex)) }}</span>
+              </button>
+            </div>
           </div>
           <template v-if="annoTool !== 'note'">
             <span class="anno-tray-sep" />
@@ -7324,21 +7360,26 @@ onBeforeUnmount(() => {
   margin: 2px;
   background: var(--border);
 }
+/* 工具按钮带中文名: 光看图标分不清「矩形 / 椭圆 / 直线 / 箭头」 */
 .anno-tool {
-  display: grid;
-  place-items: center;
-  width: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   height: 30px;
-  padding: 0;
+  padding: 0 8px;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-2);
+  font-size: var(--fs-small);
+  line-height: 1;
+  white-space: nowrap;
   cursor: pointer;
 }
 .anno-tool svg {
   width: 18px;
   height: 18px;
+  flex-shrink: 0;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.6;
@@ -7353,17 +7394,86 @@ onBeforeUnmount(() => {
   background: var(--brand);
   color: #fff;
 }
-.anno-color {
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+/* ---- 调色下拉: 触发器显示当前色, 展开是整块调色板 ---- */
+.anno-color-wrap {
+  position: relative;
+}
+.anno-color-dot {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
   border-radius: var(--radius-pill);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #000 12%, transparent);
+}
+.anno-color-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--fs-small);
+  line-height: 1;
   cursor: pointer;
 }
-.anno-color.active {
-  outline: 2px solid var(--brand);
-  outline-offset: 1px;
+.anno-color-trigger:hover,
+.anno-color-trigger.open {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.anno-color-name {
+  white-space: nowrap;
+}
+.anno-color-caret {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.anno-color-backdrop {
+  position: fixed;
+  inset: 0;
+}
+.anno-palette {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px;
+  min-width: 168px;
+  padding: var(--space-2);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+}
+.anno-palette-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 5px var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--fs-small);
+  line-height: 1;
+  text-align: left;
+  cursor: pointer;
+}
+.anno-palette-item:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.anno-palette-item.active {
+  background: color-mix(in srgb, var(--brand) 12%, transparent);
+  color: var(--brand);
 }
 .anno-width {
   display: grid;

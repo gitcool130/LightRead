@@ -80,8 +80,32 @@ try {
     await page.locator('.anno-tray .anno-tool.active[title="画笔"]').waitFor({ timeout: 2000 })
   })
 
-  // 1. 画笔: 手绘一条曲线
+  // 0. 工具条上每个图形工具都要带中文名 (光图标分不清矩形/椭圆/直线/箭头)
+  const toolLabels = (await page.locator('.anno-tray .anno-tool').allInnerTexts()).map(t => t.trim())
+  for (const label of ['选择', '画笔', '荧光笔', '矩形', '椭圆', '直线', '箭头', '文字']) {
+    assert.ok(toolLabels.includes(label), `工具条里应该有「${label}」`)
+  }
+
+  // 0.5 颜色收在一个下拉里: 红 / 亮橙 / 橙 / 黄 / 亮绿 / 绿 / 蓝 / 紫 / 墨黑
+  await page.locator('.anno-color-trigger').click()
+  await page.locator('.anno-palette').waitFor()
+  assert.equal(await page.locator('.anno-palette-item').count(), 9, '调色板应该有 9 种颜色')
+  const paletteNames = (await page.locator('.anno-palette-item').allInnerTexts()).map(t => t.trim())
+  for (const name of ['红', '亮橙', '亮绿']) {
+    assert.ok(paletteNames.includes(name), `调色板里应该有「${name}」`)
+  }
+  await page.locator('.anno-palette-item', { hasText: '亮绿' }).click()
+  await page.waitForTimeout(150)
+  assert.equal(await page.locator('.anno-palette').count(), 0, '选完颜色下拉应收起')
+  assert.equal(await page.locator('.anno-color-trigger .anno-color-name').innerText(), '亮绿')
+
+  // 1. 画笔: 手绘一条曲线, 颜色就是刚选的亮绿
   await stroke([at(0.2, 0.16), at(0.3, 0.2), at(0.42, 0.17), at(0.52, 0.22)])
+  assert.equal(
+    await page.locator('.anno-layer svg path[stroke="#22c55e"]').count(),
+    1,
+    '画笔应该用下拉里选中的亮绿',
+  )
 
   // 2. 荧光笔: 横着刷一道 (半透明, 走 multiply 混合)
   await pickTool('荧光笔')
