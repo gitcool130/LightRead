@@ -97,16 +97,17 @@ jobs:
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           Get-ChildItem out | Select-Object Name, Length | Format-Table -AutoSize
 
-      - name: 上传 Artifacts
+      - name: 上传 Artifacts（成品只放这里，不进 Release）
         uses: actions/upload-artifact@v4
         with:
-          name: lightread-windows-${{ github.sha }}
+          name: LightRead-Windows
           path: out/*
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
 
-      # 顺手把两个 exe 挂到固定的开发版 Release 上，直接点链接就能下，不用解压 artifact
-      - name: 更新开发版 Release
+      # 用户要求：dev-latest 只保留源码，不放成品。
+      # GitHub 会自动给每个 Release 附上 Source code (zip/tar.gz)，所以这里只要保证没有自定义附件即可。
+      - name: 更新开发版 Release（只留源码，清掉所有附件）
         if: ${{ inputs.bundles != 'none' }}
         shell: pwsh
         env:
@@ -114,15 +115,13 @@ jobs:
         run: |
           $sha = (git rev-parse --short HEAD)
           $time = (Get-Date).ToString('yyyy-MM-dd HH:mm')
-          $notes = "提交 $sha · 云端构建于 $time`n`n推荐下 zip：LightRead-Windows-${{ steps.collect.outputs.version }}.zip，解开就是中文名的两个文件。`n`n- Green = 绿色版（双击即用，需要 WebView2）`n- Setup = 安装版（NSIS，带开始菜单和卸载）`n`n这是开发版，不改变应用内版本号 ${{ steps.collect.outputs.version }}"
+          $notes = "本页只放源码。成品（绿色版 / 安装版 exe）请到 Actions 里取：`n`n- 打开 Actions → 最近一次成功的 Build (windows, dev) → 页面底部 Artifacts → 下载 LightRead-Windows.zip`n- 里面就是 LightRead-绿色版.exe 和 LightRead-安装版-<版本>.exe`n`n最近一次构建：提交 $sha · $time"
           gh release view dev-latest 2>$null | Out-Null
           if ($LASTEXITCODE -ne 0) {
-            gh release create dev-latest --prerelease --title '开发版（云端自动构建）' --notes $notes
+            gh release create dev-latest --prerelease --title '开发版（源码）' --notes $notes
           } else {
-            gh release edit dev-latest --prerelease --title '开发版（云端自动构建）' --notes $notes
+            gh release edit dev-latest --prerelease --title '开发版（源码）' --notes $notes
           }
-          Get-ChildItem out | ForEach-Object { gh release upload dev-latest $_.FullName --clobber }
-          # 清掉不属于本次构建的旧资源（比如历史遗留的错名文件）
-          $fresh = @(Get-ChildItem out | ForEach-Object { $_.Name })
+          # 把历史遗留的 exe 附件全删掉，只留 GitHub 自动生成的源码包
           $assets = gh release view dev-latest --json assets --jq '.assets[].name'
-          foreach ($a in $assets) { if ($fresh -notcontains $a) { gh release delete-asset dev-latest $a --yes 2>$null } }
+          foreach ($a in $assets) { gh release delete-asset dev-latest $a --yes 2>$null }
