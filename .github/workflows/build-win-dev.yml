@@ -1,8 +1,12 @@
 name: Build (windows, dev)
 
-# 手动触发的小工作流：只编译 Windows 桌面版，产出「绿色 exe」和 NSIS 安装包，
-# 上传成 Actions 产物供下载。**不推 tag、不建 release、不改版本号**，
-# 和 release.yml 那条正式发版流程互不干扰。
+# 云端出包：只编译 Windows 桌面版，产出「绿色版 exe」和「NSIS 安装包」。
+#   · 手动触发：Actions → Build (windows, dev) → Run workflow
+#   · 自动触发：推送到 main（只改文档的提交会跳过）
+# 产物两处可取：
+#   1) Releases 里固定的开发版页面：https://github.com/gitcool130/LightRead/releases/tag/dev-latest
+#   2) 本次运行的 Artifacts（保留 14 天）
+# 本机不再编译 exe，也不再构建网页便携版。
 on:
   workflow_dispatch:
     inputs:
@@ -18,9 +22,15 @@ on:
         options:
           - nsis
           - none
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+      - '本地改造补丁/**'
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: build-win-dev-${{ inputs.ref || github.ref }}
@@ -62,25 +72,46 @@ jobs:
 
       - name: 编译 Windows 版（绿色 exe + 安装包）
         if: ${{ inputs.bundles != 'none' }}
-        run: npm run tauri build -- --bundles ${{ inputs.bundles }}
+        run: npm run tauri build -- --bundles nsis
 
       - name: 编译 Windows 版（只出绿色 exe）
         if: ${{ inputs.bundles == 'none' }}
         run: npm run tauri build -- --no-bundle
 
-      - name: 收集产物
+      - name: 收集产物（改成用户习惯的文件名）
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path out | Out-Null
-          Copy-Item src-tauri\target\release\lightread.exe out\ -Force
+          $version = (Get-Content src-tauri\tauri.conf.json -Raw | ConvertFrom-Json).version
+          Copy-Item src-tauri\target\release\lightread.exe "out\LightRead-绿色版.exe" -Force
           $nsis = Get-ChildItem src-tauri\target\release\bundle\nsis\*.exe -ErrorAction SilentlyContinue
-          if ($nsis) { Copy-Item $nsis.FullName out\ -Force }
+          if ($nsis) { Copy-Item $nsis.FullName "out\LightRead-安装版-$version.exe" -Force }
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           Get-ChildItem out | Select-Object Name, Length | Format-Table -AutoSize
+        id: collect
 
-      - name: 上传产物
+      - name: 上传 Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: lightread-windows-${{ github.sha }}
           path: out/*
           if-no-files-found: error
           retention-days: 14
+
+      # 顺手把两个 exe 挂到固定的开发版 Release 上，直接点链接就能下，不用解压 artifact
+      - name: 更新开发版 Release
+        if: ${{ inputs.bundles != 'none' }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $sha = (git rev-parse --short HEAD)
+          $time = (Get-Date).ToString('yyyy-MM-dd HH:mm')
+          $notes = "提交 $sha · 云端构建于 $time`n`n- LightRead-绿色版.exe：双击即用（需要 WebView2）`n- LightRead-安装版：NSIS 安装包`n- 这是开发版，不改变应用内版本号 ${{ steps.collect.outputs.version }}"
+          gh release view dev-latest 2>$null | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create dev-latest --prerelease --title '开发版（云端自动构建）' --notes $notes
+          } else {
+            gh release edit dev-latest --notes $notes
+          }
+          gh release upload dev-latest out/LightRead-*.exe --clobber
