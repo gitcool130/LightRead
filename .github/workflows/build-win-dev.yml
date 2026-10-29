@@ -78,17 +78,24 @@ jobs:
         if: ${{ inputs.bundles == 'none' }}
         run: npm run tauri build -- --no-bundle
 
-      - name: 收集产物（改成用户习惯的文件名）
+      # GitHub 的 Release 资源名只认 ASCII, 中文会被吃掉, 所以:
+      #   · 另打一个 zip, 压缩包里的文件名才保留中文（推荐下载）
+      #   · exe 用英文名直接挂 Release（Green = 绿色版, Setup = 安装版）
+      - name: 收集产物（英文名给 Release，中文名放进 zip）
+        id: collect
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path out | Out-Null
+          New-Item -ItemType Directory -Force -Path dist-cn | Out-Null
           $version = (Get-Content src-tauri\tauri.conf.json -Raw | ConvertFrom-Json).version
-          Copy-Item src-tauri\target\release\lightread.exe "out\LightRead-绿色版.exe" -Force
+          Copy-Item src-tauri\target\release\lightread.exe "dist-cn\LightRead-绿色版.exe" -Force
           $nsis = Get-ChildItem src-tauri\target\release\bundle\nsis\*.exe -ErrorAction SilentlyContinue
-          if ($nsis) { Copy-Item $nsis.FullName "out\LightRead-安装版-$version.exe" -Force }
+          if ($nsis) { Copy-Item $nsis.FullName "dist-cn\LightRead-安装版-$version.exe" -Force }
+          Compress-Archive -Path dist-cn\*.exe -DestinationPath "out\LightRead-Windows-$version.zip" -Force
+          Copy-Item "dist-cn\LightRead-绿色版.exe" "out\LightRead-Green-$version.exe" -Force
+          if ($nsis) { Copy-Item "dist-cn\LightRead-安装版-$version.exe" "out\LightRead-Setup-$version.exe" -Force }
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           Get-ChildItem out | Select-Object Name, Length | Format-Table -AutoSize
-        id: collect
 
       - name: 上传 Artifacts
         uses: actions/upload-artifact@v4
@@ -107,11 +114,15 @@ jobs:
         run: |
           $sha = (git rev-parse --short HEAD)
           $time = (Get-Date).ToString('yyyy-MM-dd HH:mm')
-          $notes = "提交 $sha · 云端构建于 $time`n`n- LightRead-绿色版.exe：双击即用（需要 WebView2）`n- LightRead-安装版：NSIS 安装包`n- 这是开发版，不改变应用内版本号 ${{ steps.collect.outputs.version }}"
+          $notes = "提交 $sha · 云端构建于 $time`n`n推荐下 zip：LightRead-Windows-${{ steps.collect.outputs.version }}.zip，解开就是中文名的两个文件。`n`n- Green = 绿色版（双击即用，需要 WebView2）`n- Setup = 安装版（NSIS，带开始菜单和卸载）`n`n这是开发版，不改变应用内版本号 ${{ steps.collect.outputs.version }}"
           gh release view dev-latest 2>$null | Out-Null
           if ($LASTEXITCODE -ne 0) {
             gh release create dev-latest --prerelease --title '开发版（云端自动构建）' --notes $notes
           } else {
-            gh release edit dev-latest --notes $notes
+            gh release edit dev-latest --prerelease --title '开发版（云端自动构建）' --notes $notes
           }
-          gh release upload dev-latest out/LightRead-*.exe --clobber
+          Get-ChildItem out | ForEach-Object { gh release upload dev-latest $_.FullName --clobber }
+          # 清掉不属于本次构建的旧资源（比如历史遗留的错名文件）
+          $fresh = @(Get-ChildItem out | ForEach-Object { $_.Name })
+          $assets = gh release view dev-latest --json assets --jq '.assets[].name'
+          foreach ($a in $assets) { if ($fresh -notcontains $a) { gh release delete-asset dev-latest $a --yes 2>$null } }
