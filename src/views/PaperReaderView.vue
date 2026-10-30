@@ -1396,6 +1396,67 @@ function toggleDrawerTab(tab: DrawerTab) {
   else setDrawerTab(tab)
 }
 
+/* ---- 侧栏宽度: 拖右缘把手自由调整, 双击复位, 记住上次宽度 ---- */
+const DRAWERW_KEY = 'lightread-paper-drawer-w'
+const DRAWER_DEFAULT_W = 292
+const DRAWER_MIN_W = 180
+const DRAWER_MAX_W = 560
+
+/** 下限 180, 上限取 560 与容器 60% 的较小值, 保证正文不被挤没 */
+function clampDrawerWidth(width: number, containerWidth = 0): number {
+  const upper = containerWidth > 0
+    ? Math.min(DRAWER_MAX_W, Math.max(DRAWER_MIN_W, containerWidth * 0.6))
+    : DRAWER_MAX_W
+  return Math.round(Math.min(Math.max(width, DRAWER_MIN_W), upper))
+}
+
+const drawerW = ref(
+  clampDrawerWidth(Number.parseFloat(localStorage.getItem(DRAWERW_KEY) ?? '') || DRAWER_DEFAULT_W),
+)
+const drawerPaneStyle = computed<Record<string, string>>(() => ({ '--drawer-w': `${drawerW.value}px` }))
+
+function saveDrawerWidth() {
+  localStorage.setItem(DRAWERW_KEY, String(drawerW.value))
+}
+
+function startDrawerSplit(e: PointerEvent) {
+  const split = e.currentTarget as HTMLElement
+  const container = split.parentElement
+  if (!container) return
+  split.setPointerCapture(e.pointerId)
+  const startX = e.clientX
+  const startW = drawerW.value
+  const upper = clampDrawerWidth(DRAWER_MAX_W, container.getBoundingClientRect().width)
+  const move = (ev: PointerEvent) => {
+    drawerW.value = Math.round(Math.min(Math.max(startW + ev.clientX - startX, DRAWER_MIN_W), upper))
+  }
+  const up = () => {
+    split.removeEventListener('pointermove', move)
+    split.removeEventListener('pointerup', up)
+    split.removeEventListener('pointercancel', up)
+    saveDrawerWidth()
+  }
+  split.addEventListener('pointermove', move)
+  split.addEventListener('pointerup', up)
+  split.addEventListener('pointercancel', up)
+}
+
+function nudgeDrawerWidth(delta: number) {
+  drawerW.value = clampDrawerWidth(drawerW.value + delta)
+  saveDrawerWidth()
+}
+
+function onDrawerSplitKey(e: KeyboardEvent) {
+  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+  e.preventDefault()
+  nudgeDrawerWidth(e.key === 'ArrowRight' ? 16 : -16)
+}
+
+function resetDrawerWidth() {
+  drawerW.value = DRAWER_DEFAULT_W
+  saveDrawerWidth()
+}
+
 /* ================= 页面缩略图 ================= */
 
 const THUMB_MAX_WIDTH = 210
@@ -5312,6 +5373,7 @@ onBeforeUnmount(() => {
         v-show="drawerOpen"
         class="side-drawer"
         :class="{ 'fullscreen-toc-drawer': isFullscreen && tocOpen && !presentationMode }"
+        :style="drawerPaneStyle"
       >
         <div class="drawer-head">
           <div class="drawer-tabs" role="tablist">
@@ -5400,6 +5462,23 @@ onBeforeUnmount(() => {
           </template>
         </div>
       </aside>
+
+      <!-- 目录栏拖拽把手: 左右拖动自由调宽, 双击恢复默认 -->
+      <div
+        v-show="drawerOpen && !isFullscreen"
+        class="drawer-splitter"
+        role="separator"
+        aria-orientation="vertical"
+        :aria-label="t('reader.resizeOutline')"
+        :aria-valuenow="Math.round(drawerW)"
+        :aria-valuemin="DRAWER_MIN_W"
+        :aria-valuemax="DRAWER_MAX_W"
+        :title="t('reader.resizeOutline')"
+        tabindex="0"
+        @pointerdown.prevent="startDrawerSplit"
+        @dblclick="resetDrawerWidth"
+        @keydown="onDrawerSplitKey"
+      />
 
       <!-- 左: 原文 PDF 连续滚动 (划词 / 高亮 / 链接跳转) + 底部悬浮工具条 -->
       <div class="pane-left-wrap">
@@ -7784,8 +7863,8 @@ onBeforeUnmount(() => {
 .side-drawer {
   position: relative;
   z-index: 20;
-  flex: 0 0 292px;
-  width: 292px;
+  flex: 0 0 var(--drawer-w, 292px);
+  width: var(--drawer-w, 292px);
   min-width: 0;
   height: 100%;
   display: flex;
@@ -7793,6 +7872,40 @@ onBeforeUnmount(() => {
   overflow: hidden;
   background: var(--card);
   border-right: 1px solid var(--border);
+}
+/* 目录栏右缘拖拽把手: 常驻一条细竖线提示可拖, 悬停 / 聚焦时变粗变亮 */
+.drawer-splitter {
+  flex: 0 0 7px;
+  width: 7px;
+  margin: 0 -4px 0 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: col-resize;
+  touch-action: none;
+  position: relative;
+  z-index: 21;
+}
+.drawer-splitter::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 3px;
+  height: 40px;
+  border-radius: var(--radius-pill);
+  background: var(--border);
+  transform: translate(-50%, -50%);
+  transition: height 140ms ease, background-color 140ms ease;
+}
+.drawer-splitter:hover::after,
+.drawer-splitter:active::after,
+.drawer-splitter:focus-visible::after {
+  height: 72px;
+  background: var(--brand);
+}
+.drawer-splitter:focus-visible {
+  outline: none;
 }
 .drawer-head {
   flex: 0 0 49px;
@@ -8930,9 +9043,13 @@ onBeforeUnmount(() => {
     inset: 0 auto 0 0;
     z-index: 36;
     flex-basis: auto;
-    width: min(292px, calc(100vw - 48px));
+    width: min(var(--drawer-w, 292px), calc(100vw - 48px));
     height: auto;
     box-shadow: 10px 0 28px rgba(29, 33, 41, 0.12);
+  }
+  /* 窄窗口侧栏是浮层, 不再拖宽 */
+  .drawer-splitter {
+    display: none;
   }
   .shortcut-row {
     grid-template-columns: 1fr;

@@ -1849,6 +1849,7 @@ export default {
   'paper.copy': '复制',
   'paper.copied': '已复制',
   'paper.noOutline': '这份 PDF 没有目录，可用书内搜索找内容',
+  'reader.resizeOutline': '拖动调整目录栏宽度（双击恢复默认）',
   'paper.jumpBack': '回到刚才位置',
   'paper.selTranslate': '划词翻译',
   'paper.selTranslateBtn': '翻译',

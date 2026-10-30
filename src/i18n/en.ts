@@ -1849,6 +1849,7 @@ export default {
   'paper.copy': 'Copy',
   'paper.copied': 'Copied',
   'paper.noOutline': "This PDF has no contents list. Use search to find a passage",
+  'reader.resizeOutline': 'Drag to resize the outline panel (double-click to reset)',
   'paper.jumpBack': 'Back to previous spot',
   'paper.selTranslate': 'Selection translation',
   'paper.selTranslateBtn': 'Translate',

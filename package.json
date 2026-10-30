@@ -20,6 +20,7 @@
     "test:pdf-reflow": "node --experimental-strip-types --test scripts/test-pdf-reflow.mjs",
     "test:pdf-anno": "node --experimental-strip-types --test scripts/test-pdf-anno.mjs",
     "e2e:pdf-anno": "node scripts/e2e-pdf-anno.mjs",
+    "e2e:pdf-drawer": "node scripts/e2e-pdf-drawer.mjs",
     "e2e:pdf-reflow": "node scripts/e2e-pdf-reflow.mjs",
     "e2e:pdf-anno": "node scripts/e2e-pdf-anno.mjs",
     "e2e:convert-epub": "node scripts/e2e-convert-epub.mjs",
