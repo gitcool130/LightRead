@@ -48,6 +48,8 @@ export interface SegAnno {
   a: number
   /** 仅 arc: true 顺时针 (默认), false 逆时针 (按住 Shift 画) */
   cw?: boolean
+  /** 仅 arc: 半径系数 = 弦长的倍数, 默认 0.75 (弧约 84°); 0.5 = 半圆, 1.0 = 极平弧 */
+  rf?: number
 }
 
 /** 矩形 / 椭圆 */
@@ -167,6 +169,8 @@ export function encodeDraw(a: DrawAnno): string {
     }
     // 圆弧的方向只在逆时针时才写 (顺时针是默认值, 老数据没这个字段也按顺时针)
     if (a.t === 'arc' && a.cw === false) body.cw = 0
+    // 圆弧半径系数只在非默认值时写
+    if (a.t === 'arc' && typeof a.rf === 'number' && Math.abs(a.rf - ARC_RADIUS_DEFAULT) > 0.001) body.rf = r1(a.rf)
   }
   return ANNO_PREFIX + JSON.stringify(body)
 }
@@ -210,7 +214,13 @@ export function decodeDraw(cfi: string): DrawAnno | null {
     w: Math.max(0.5, num(raw.w, 2)), c: color, a: clamp01(num(raw.a, 1)),
   }
   // arc 默认顺时针; 只有明确写了 cw: 0 才是逆时针
-  return t === 'arc' ? { ...seg, t: 'arc', cw: num(raw.cw, 1) !== 0 } : seg
+  if (t === 'arc') {
+    const arc: SegAnno = { ...seg, t: 'arc', cw: num(raw.cw, 1) !== 0 }
+    const rf = num(raw.rf, ARC_RADIUS_DEFAULT)
+    if (Math.abs(rf - ARC_RADIUS_DEFAULT) > 0.001) arc.rf = rf
+    return arc
+  }
+  return seg
 }
 
 const clamp01 = (v: number) => Math.min(1, Math.max(0.05, v))
@@ -365,8 +375,20 @@ export function arrowHeadPoints(x1: number, y1: number, x2: number, y2: number, 
   return `${r1(x2)},${r1(y2)} ${r1(ax)},${r1(ay)} ${r1(bx)},${r1(by)}`
 }
 
+/** 圆弧半径系数: 弦长的倍数, 决定弧的弯曲程度 */
+export const ARC_RADIUS_DEFAULT = 0.75
+export const ARC_RADIUS_OPTIONS = [0.5, 0.75, 1.0, 1.5]
+
+/** 取 arc 的半径系数, 缺省 0.75 */
+export function arcRadiusFactor(a: SegAnno): number {
+  const rf = a.rf
+  return typeof rf === 'number' && Number.isFinite(rf) && rf >= 0.5 && rf <= 3
+    ? rf
+    : ARC_RADIUS_DEFAULT
+}
+
 /**
- * 圆弧的圆心与半径: 拖拽两点是弦, 半径取弦长的 0.75 倍 (弧约 84°, 看得清又不夸张)。
+ * 圆弧的圆心与半径: 拖拽两点是弦, 半径取弦长 × rf 倍 (默认 0.75, 弧约 84°)。
  * 顺时针 (sweep=1) 时圆心落在弦的顺时针一侧, 逆时针反之; 圆心决定弧凸向哪边。
  */
 export function arcCircle(a: SegAnno): { cx: number; cy: number; r: number } | null {
@@ -374,7 +396,8 @@ export function arcCircle(a: SegAnno): { cx: number; cy: number; r: number } | n
   const dy = a.y2 - a.y1
   const len = Math.hypot(dx, dy)
   if (len < 0.01) return null
-  const r = Math.max(len / 2, len * 0.75)
+  const rf = arcRadiusFactor(a)
+  const r = Math.max(len / 2, len * rf)
   const mx = (a.x1 + a.x2) / 2
   const my = (a.y1 + a.y2) / 2
   const h = Math.sqrt(Math.max(0, r * r - (len / 2) ** 2))
@@ -438,14 +461,14 @@ export function isMeaningfulAnno(a: DrawAnno, minSize = 3): boolean {
   return b.w > minSize || b.h > minSize
 }
 
-/** 由拖拽起止点生成批注原型 */
-export function annoFromDrag(tool: AnnoTool, page: number, from: Pt, to: Pt, w: number, c: string, alpha: number): DrawAnno {
+/** 由拖拽起止点生成批注原型; arcRf 是圆弧半径系数 (默认 0.75) */
+export function annoFromDrag(tool: AnnoTool, page: number, from: Pt, to: Pt, w: number, c: string, alpha: number, arcRf = ARC_RADIUS_DEFAULT): DrawAnno {
   if (tool === 'pen' || tool === 'marker') {
     return { t: 'ink', p: page, pts: [[from.x, from.y]], w, c, a: alpha }
   }
   if (tool === 'line' || tool === 'arrow' || tool === 'arc') {
     const seg: SegAnno = { t: tool, p: page, x1: from.x, y1: from.y, x2: to.x, y2: to.y, w, c, a: alpha }
-    return tool === 'arc' ? { ...seg, t: 'arc', cw: true } : seg
+    return tool === 'arc' ? { ...seg, t: 'arc', cw: true, rf: arcRf } : seg
   }
   if (tool === 'rect' || tool === 'ellipse') {
     return { t: tool, p: page, x1: from.x, y1: from.y, x2: to.x, y2: to.y, w, c, a: alpha }

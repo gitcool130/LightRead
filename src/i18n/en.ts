@@ -896,6 +896,7 @@ export default {
   'reader.annoColorName.Purple': 'Purple',
   'reader.annoColorName.Ink': 'Ink',
   'reader.annoWidth': 'Width',
+  'reader.annoRadius': 'Arc radius',
   'reader.annoDelete': 'Delete annotation',
   'reader.annoTab': 'Drawings',
   'reader.annoHintDraw': 'Drag to draw · Esc to exit',

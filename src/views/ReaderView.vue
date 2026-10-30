@@ -82,6 +82,68 @@ const fraction = ref(0)
 const chapterLabel = ref('')
 const panel = ref<'none' | 'toc' | 'annotations' | 'search' | 'ai'>('none')
 const panelEl = ref<HTMLElement>()
+
+/* ---- 侧栏面板宽度: 拖左缘把手自由调整, 双击循环档位, 记住上次宽度 ---- */
+const PANEL_W_KEY = 'lightread-epub-panel-w'
+const PANEL_DEFAULT_W = 320
+const PANEL_MIN_W = 220
+const PANEL_MAX_W = 560
+const PANEL_SNAP = [292, 360, 480]
+
+function clampPanelWidth(width: number): number {
+  return Math.round(Math.min(Math.max(width, PANEL_MIN_W), PANEL_MAX_W))
+}
+
+function snapPanelWidth(width: number): number {
+  for (const snap of PANEL_SNAP) {
+    if (Math.abs(width - snap) <= 20) return snap
+  }
+  return width
+}
+
+const panelW = ref(
+  clampPanelWidth(Number.parseFloat(localStorage.getItem(PANEL_W_KEY) ?? '') || PANEL_DEFAULT_W),
+)
+const panelStyle = computed<Record<string, string>>(() => ({ '--epub-panel-w': `${panelW.value}px` }))
+
+function savePanelWidth() {
+  localStorage.setItem(PANEL_W_KEY, String(panelW.value))
+}
+
+function startPanelSplit(e: PointerEvent) {
+  const split = e.currentTarget as HTMLElement
+  split.setPointerCapture(e.pointerId)
+  const startX = e.clientX
+  const startW = panelW.value
+  // 面板在右侧, 拖把手往左 = 变宽
+  const move = (ev: PointerEvent) => {
+    panelW.value = clampPanelWidth(startW - (ev.clientX - startX))
+  }
+  const up = () => {
+    split.removeEventListener('pointermove', move)
+    split.removeEventListener('pointerup', up)
+    split.removeEventListener('pointercancel', up)
+    panelW.value = clampPanelWidth(snapPanelWidth(panelW.value))
+    savePanelWidth()
+  }
+  split.addEventListener('pointermove', move)
+  split.addEventListener('pointerup', up)
+  split.addEventListener('pointercancel', up)
+}
+
+function resetPanelWidth() {
+  const cur = panelW.value
+  const idx = PANEL_SNAP.indexOf(cur)
+  panelW.value = clampPanelWidth(idx >= 0 ? PANEL_SNAP[(idx + 1) % PANEL_SNAP.length] : PANEL_DEFAULT_W)
+  savePanelWidth()
+}
+
+function onPanelSplitKey(e: KeyboardEvent) {
+  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+  e.preventDefault()
+  panelW.value = clampPanelWidth(panelW.value + (e.key === 'ArrowLeft' ? 16 : -16))
+  savePanelWidth()
+}
 const settingsOpen = ref(false)
 
 // ---- 沉浸式阅读: 工具栏悬浮, 自动隐藏, 正文占满全窗 ----
@@ -3412,7 +3474,22 @@ onBeforeUnmount(() => {
     </div>
 
     <!-- 侧栏面板 -->
-    <aside v-if="panel !== 'none'" ref="panelEl" class="panel card">
+    <aside v-if="panel !== 'none'" ref="panelEl" class="panel card" :style="panelStyle">
+      <!-- 拖拽把手: 拖动调宽, 双击循环档位 -->
+      <div
+        class="panel-splitter"
+        role="separator"
+        aria-orientation="vertical"
+        :aria-label="t('reader.resizeOutline')"
+        :aria-valuenow="Math.round(panelW)"
+        :aria-valuemin="PANEL_MIN_W"
+        :aria-valuemax="PANEL_MAX_W"
+        :title="t('reader.resizeOutline')"
+        tabindex="0"
+        @pointerdown.prevent="startPanelSplit"
+        @dblclick="resetPanelWidth"
+        @keydown="onPanelSplitKey"
+      />
       <template v-if="panel === 'toc'">
         <h3>{{ t('reader.toc') }}</h3>
         <div class="panel-body">
@@ -3912,10 +3989,46 @@ onBeforeUnmount(() => {
   right: 12px;
   bottom: calc(50px + var(--safe-bottom));
   z-index: 15;
-  width: min(320px, calc(100% - 24px));
+  width: min(var(--epub-panel-w, 320px), calc(100% - 24px));
   padding: 16px;
   display: flex;
   flex-direction: column;
+}
+/* 侧栏左缘拖拽把手 */
+.panel-splitter {
+  position: absolute;
+  top: 0;
+  left: -4px;
+  width: 7px;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: col-resize;
+  touch-action: none;
+  z-index: 1;
+}
+.panel-splitter::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 3px;
+  height: 40px;
+  border-radius: var(--radius-pill);
+  background: var(--border);
+  transform: translate(-50%, -50%);
+  transition: height 140ms ease, background-color 140ms ease;
+}
+.panel-splitter:hover::after,
+.panel-splitter:active::after,
+.panel-splitter:focus-visible::after {
+  height: 72px;
+  background: var(--brand);
+}
+.panel-splitter:focus-visible {
+  outline: none;
 }
 .panel h3 {
   font-size: 14px;
@@ -4708,6 +4821,10 @@ onBeforeUnmount(() => {
   }
   .panel {
     height: 72%;
+  }
+  /* 窄屏面板是底部 sheet, 不拖宽 */
+  .panel-splitter {
+    display: none;
   }
   .tts-panel {
     overflow-y: auto;

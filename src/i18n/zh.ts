@@ -896,6 +896,7 @@ export default {
   'reader.annoColorName.Purple': '紫',
   'reader.annoColorName.Ink': '墨黑',
   'reader.annoWidth': '粗细',
+  'reader.annoRadius': '弧度',
   'reader.annoDelete': '删除批注',
   'reader.annoTab': '绘图批注',
   'reader.annoHintDraw': '拖动绘制 · Esc 退出',

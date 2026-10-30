@@ -30,6 +30,8 @@ import {
   ANNO_DEFAULT_COLOR,
   ANNO_DEFAULT_WIDTH,
   ANNO_WIDTHS,
+  ARC_RADIUS_DEFAULT,
+  ARC_RADIUS_OPTIONS,
   NOTE_BOX,
   annoBounds,
   annoColorName,
@@ -1396,11 +1398,21 @@ function toggleDrawerTab(tab: DrawerTab) {
   else setDrawerTab(tab)
 }
 
-/* ---- 侧栏宽度: 拖右缘把手自由调整, 双击复位, 记住上次宽度 ---- */
+/* ---- 侧栏宽度: 拖右缘把手自由调整, 双击循环档位, 记住上次宽度 ---- */
 const DRAWERW_KEY = 'lightread-paper-drawer-w'
 const DRAWER_DEFAULT_W = 292
 const DRAWER_MIN_W = 180
 const DRAWER_MAX_W = 560
+/** 吸附档位: 松手时自动吸到最近的档位 */
+const DRAWER_SNAP = [292, 360, 480]
+
+/** 取最近的吸附档位; 不在 ±20 px 范围内则保持原值 */
+function snapDrawerWidth(width: number): number {
+  for (const snap of DRAWER_SNAP) {
+    if (Math.abs(width - snap) <= 20) return snap
+  }
+  return width
+}
 
 /** 下限 180, 上限取 560 与容器 60% 的较小值, 保证正文不被挤没 */
 function clampDrawerWidth(width: number, containerWidth = 0): number {
@@ -1434,6 +1446,7 @@ function startDrawerSplit(e: PointerEvent) {
     split.removeEventListener('pointermove', move)
     split.removeEventListener('pointerup', up)
     split.removeEventListener('pointercancel', up)
+    drawerW.value = clampDrawerWidth(snapDrawerWidth(drawerW.value))
     saveDrawerWidth()
   }
   split.addEventListener('pointermove', move)
@@ -1452,8 +1465,11 @@ function onDrawerSplitKey(e: KeyboardEvent) {
   nudgeDrawerWidth(e.key === 'ArrowRight' ? 16 : -16)
 }
 
+/** 双击: 在档位 292 → 360 → 480 → 292 之间循环; 当前不在档位上则跳到默认 292 */
 function resetDrawerWidth() {
-  drawerW.value = DRAWER_DEFAULT_W
+  const cur = drawerW.value
+  const idx = DRAWER_SNAP.indexOf(cur)
+  drawerW.value = clampDrawerWidth(idx >= 0 ? DRAWER_SNAP[(idx + 1) % DRAWER_SNAP.length] : DRAWER_DEFAULT_W)
   saveDrawerWidth()
 }
 
@@ -1948,6 +1964,8 @@ const annoColorOpen = ref(false)
 const annoColorLabel = computed(() => t(annoColorName(annoColor.value)))
 /** 线宽按屏幕 px 调, 落到页坐标时按当前缩放折回去, 手感不随缩放漂移 */
 const annoWidthPx = ref(ANNO_DEFAULT_WIDTH.pen)
+/** 圆弧半径系数: 弦长 × rf = 半径; 0.5=半圆, 0.75=默认, 1.0=平弧, 1.5=极平弧 */
+const annoArcRf = ref(ARC_RADIUS_DEFAULT)
 const annoDraft = ref<DrawAnno | null>(null)
 /** 荧光笔: 拖过文字时的整段铺色预览 */
 const markerPreview = ref<{ page: number; a: number; b: number; rects: HlRect[] } | null>(null)
@@ -1961,7 +1979,7 @@ const annoActive = computed(() => annoTool.value !== 'none')
 const annoHint = computed(() => {
   if (annoTool.value === 'select') return t('reader.annoHintSelect')
   if (annoTool.value === 'note') return t('reader.annoHintNote')
-  if (annoTool.value === 'arc') return t('reader.annoHintArc')
+  if (annoTool.value === 'arc') return `${t('reader.annoHintArc')} · ${t('reader.annoRadius')} ${annoArcRf.value}`
   if (annoTool.value === 'marker') return t('reader.annoHintMarker')
   return t('reader.annoHintDraw')
 })
@@ -2140,6 +2158,21 @@ function pickAnnoWidth(px: number) {
   void restyleSelectedAnno()
 }
 
+/** 切换圆弧半径系数; 选中态下同时改那条 arc 的 rf */
+function pickAnnoArcRf(rf: number) {
+  annoArcRf.value = rf
+  const sel = annoSelected.value
+  if (sel && sel.d.t === 'arc') {
+    const next = { ...sel.d, rf }
+    const rec = annotations.value.find(a => a.id === sel.id)
+    if (rec) {
+      rec.cfi = encodeDraw(next)
+      annoSelected.value = { id: sel.id, d: next }
+      void getStorage().then(s => s.updateAnnotation(sel.id, { cfi: rec.cfi }))
+    }
+  }
+}
+
 let annoDrag: {
   page: number
   tool: AnnoMode
@@ -2170,6 +2203,7 @@ function onAnnoPointerDown(e: PointerEvent, page: number) {
     }
     if (annoEditingId.value && annoEditingId.value !== hit.id) void commitAnnoText()
     annoSelected.value = { id: hit.id, d: hit.d }
+    if (hit.d.t === 'arc' && typeof hit.d.rf === 'number') annoArcRf.value = hit.d.rf
     annoDrag = { page, tool, start: pt, last: pt, moved: false, id: hit.id, orig: hit.d }
     window.addEventListener('pointermove', onAnnoMove)
     window.addEventListener('pointerup', onAnnoUp, { once: true })
@@ -2200,7 +2234,7 @@ function onAnnoPointerDown(e: PointerEvent, page: number) {
   }
 
   annoDrag = { page, tool, start: pt, last: pt, moved: false }
-  annoDraft.value = annoFromDrag(tool, page, pt, pt, annoWidthOf(page), annoColor.value, annoAlpha(tool))
+  annoDraft.value = annoFromDrag(tool, page, pt, pt, annoWidthOf(page), annoColor.value, annoAlpha(tool), annoArcRf.value)
   // 圆弧默认顺时针, 起笔时按着 Shift 就是逆时针
   if (annoDraft.value.t === 'arc') annoDraft.value = { ...annoDraft.value, cw: !e.shiftKey }
   window.addEventListener('pointermove', onAnnoMove)
@@ -5561,7 +5595,21 @@ onBeforeUnmount(() => {
               </button>
             </div>
           </template>
-          <span class="anno-tray-sep" />
+          <template v-if="annoTool === 'arc'">
+            <span class="anno-tray-sep" />
+            <div class="anno-tray-row anno-tray-radii" role="group" :aria-label="t('reader.annoRadius')">
+              <button
+                v-for="rf in ARC_RADIUS_OPTIONS"
+                :key="rf"
+                type="button"
+                class="anno-radius"
+                :class="{ active: annoArcRf === rf }"
+                :title="`${t('reader.annoRadius')} ${rf}`"
+                :aria-label="`${t('reader.annoRadius')} ${rf}`"
+                @click="pickAnnoArcRf(rf)"
+              >{{ rf }}</button>
+            </div>
+          </template>
           <button
             v-if="annoSelected"
             type="button"
@@ -7723,6 +7771,27 @@ onBeforeUnmount(() => {
 }
 .anno-width.active span {
   background: var(--brand);
+}
+.anno-radius {
+  display: grid;
+  place-items: center;
+  min-width: 32px;
+  height: 30px;
+  padding: 0 var(--space-1);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+.anno-radius:hover {
+  background: var(--surface-2);
+}
+.anno-radius.active {
+  background: color-mix(in srgb, var(--brand) 12%, transparent);
+  color: var(--brand);
 }
 .anno-tray-del {
   padding: 2px var(--space-2);
