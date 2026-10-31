@@ -125,9 +125,13 @@ jobs:
             $parts = $row -split ':'
             if ($parts.Count -lt 2) { continue }
             if ($parts[1] -ne $mine) {
-              gh api -X DELETE "repos/${{ github.repository }}/actions/artifacts/$($parts[0])"
+              # 并发构建或手动删除会让这个 id 已经不存在，404 不该让整个 job 变红
+              gh api -X DELETE "repos/${{ github.repository }}/actions/artifacts/$($parts[0])" 2>$null
+              if ($LASTEXITCODE -ne 0) { Write-Host "跳过 $($parts[0])：可能已不存在" }
             }
           }
+          # 清理是收尾动作，失败不影响成品
+          exit 0
 
       # 用户要求：dev-latest 只保留源码，不放成品。
       # GitHub 会自动给每个 Release 附上 Source code (zip/tar.gz)，所以这里只要保证没有自定义附件即可。
