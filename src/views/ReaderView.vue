@@ -2530,7 +2530,9 @@ async function untilLoaded() {
 }
 
 async function navigateToc(href: string) {
-  panel.value = 'none'
+  // 宽屏: 面板保持展开, 可以连着点章节 (和 PDF 目录栏一致);
+  // 窄屏: 面板是底部抽屉, 跳转后收起, 不然挡住正文
+  if (window.matchMedia('(max-width: 720px)').matches) panel.value = 'none'
   interruptTTSForReposition()
   await untilLoaded()
   view?.goTo(href).catch(() => toast(t('reader.cantGoto'), 'error'))
