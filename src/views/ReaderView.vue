@@ -80,7 +80,7 @@ let smartTocFlat: Array<{ label: string; href: string }> = []
 const currentTocHref = ref<string>()
 const fraction = ref(0)
 const chapterLabel = ref('')
-const panel = ref<'none' | 'toc' | 'annotations' | 'search' | 'ai'>('none')
+const panel = ref<'none' | 'toc' | 'annotations' | 'search' | 'ai'>('toc')
 const panelEl = ref<HTMLElement>()
 
 /* ---- 侧栏面板宽度: 拖左缘把手自由调整, 双击循环档位, 记住上次宽度 ---- */
@@ -2118,10 +2118,9 @@ function onSectionLoad(e: CustomEvent) {
       if (sel && !sel.isCollapsed && sel.toString().trim()) updateSelection()
     }, 300)
   })
-  // 点击正文时收起目录等侧栏和浮层; 若这一下是为了收面板, 不再触发翻页
+  // 点击正文时收起浮层 (划词浮条等), 但不关侧栏面板 — 面板只通过 × 按钮或 togglePanel 关
   doc.addEventListener('mousedown', () => {
-    overlayDismissed = panel.value !== 'none' || settingsOpen.value || !!activeAnnotation.value
-    panel.value = 'none'
+    overlayDismissed = settingsOpen.value || !!activeAnnotation.value
     settingsOpen.value = false
     activeAnnotation.value = null
   })
@@ -2184,8 +2183,7 @@ function onSectionLoad(e: CustomEvent) {
     if (st.moved > 10) return
     if (Date.now() - st.t > 350) return
     e.stopImmediatePropagation()
-    if (panel.value !== 'none' || settingsOpen.value || activeAnnotation.value) {
-      panel.value = 'none'
+    if (settingsOpen.value || activeAnnotation.value) {
       settingsOpen.value = false
       activeAnnotation.value = null
     } else {
@@ -2358,8 +2356,7 @@ function handleTapZone(x: number, y: number, rect: DOMRect) {
  */
 function onMarginClick(e: MouseEvent) {
   if (e.target !== view || loading.value) return
-  if (panel.value !== 'none' || settingsOpen.value || activeAnnotation.value) {
-    panel.value = 'none'
+  if (settingsOpen.value || activeAnnotation.value) {
     settingsOpen.value = false
     activeAnnotation.value = null
     return
