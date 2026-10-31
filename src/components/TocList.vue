@@ -18,28 +18,34 @@ defineEmits<{
   navigate: [href: string]
 }>()
 
-/** 每个有子项的节点默认收起；顶层（depth 0）默认展开 */
-const collapsedSet = ref<Set<string>>(new Set())
+/**
+ * 折叠策略：默认全部收起，用户点击箭头后加入 expandedSet 展开。
+ * 例外：如果子树包含当前阅读位置，自动展开那条路径（不改 Set，只影响渲染）。
+ */
+const expandedSet = ref<Set<string>>(new Set())
 
 /** 生成稳定 key：depth-index 组合，递归时拼父路径 */
-function nodeKey(depth: number, index: number, parentKey?: string): string {
-  return parentKey ? `${parentKey}.${depth}-${index}` : `${depth}-${index}`
+function nodeKey(depth: number, index: number): string {
+  return `${depth}-${index}`
 }
 
 function hasChildren(item: TocItem): boolean {
   return !!item.subitems?.length
 }
 
-function isCollapsed(key: string): boolean {
-  return collapsedSet.value.has(key)
+/** 是否展开：在 expandedSet 里，或子树包含当前条目（自动展开路径） */
+function isExpanded(key: string, item: TocItem): boolean {
+  if (expandedSet.value.has(key)) return true
+  if (subtreeContainsCurrent(item.subitems, props.currentHref)) return true
+  return false
 }
 
-function toggleCollapse(key: string) {
-  if (collapsedSet.value.has(key)) collapsedSet.value.delete(key)
-  else collapsedSet.value.add(key)
+function toggleExpand(key: string) {
+  if (expandedSet.value.has(key)) expandedSet.value.delete(key)
+  else expandedSet.value.add(key)
 }
 
-/** 当子树包含当前条目时，父节点也应高亮展开 */
+/** 当子树包含当前条目时，父节点自动展开 */
 function subtreeContainsCurrent(items: TocItem[] | null | undefined, href?: string): boolean {
   if (!href || !items) return false
   for (const item of items) {
@@ -63,11 +69,11 @@ function subtreeContainsCurrent(items: TocItem[] | null | undefined, href?: stri
           v-if="hasChildren(item)"
           type="button"
           class="toc-toggle"
-          :aria-label="isCollapsed(nodeKey(depth ?? 0, i)) ? t('common.expand') : t('common.collapse')"
-          @click.stop="toggleCollapse(nodeKey(depth ?? 0, i))"
+          :aria-label="isExpanded(nodeKey(depth ?? 0, i), item) ? t('common.collapse') : t('common.expand')"
+          @click.stop="toggleExpand(nodeKey(depth ?? 0, i))"
         >
           <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"
-            :style="{ transform: isCollapsed(nodeKey(depth ?? 0, i)) ? 'rotate(0deg)' : 'rotate(90deg)', transition: 'transform .15s' }">
+            :style="{ transform: isExpanded(nodeKey(depth ?? 0, i), item) ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform .15s' }">
             <path fill="currentColor" d="M5.5 3.5a.8.8 0 0 1 1.2-.1l4 4a.8.8 0 0 1 0 1.2l-4 4a.8.8 0 1 1-1.2-1.2L8.8 8 5.5 4.7a.8.8 0 0 1-.1-1.2z" />
           </svg>
         </button>
@@ -83,17 +89,9 @@ function subtreeContainsCurrent(items: TocItem[] | null | undefined, href?: stri
           {{ item.label?.trim() || t('reader.untitled') }}
         </button>
       </div>
-      <!-- 子级：默认收起；但如果包含当前条目则自动展开 -->
+      <!-- 子级：默认收起，展开时才渲染 -->
       <TocList
-        v-if="hasChildren(item) && !isCollapsed(nodeKey(depth ?? 0, i))"
-        :items="item.subitems!"
-        :current-href="currentHref"
-        :depth="(depth ?? 0) + 1"
-        @navigate="$emit('navigate', $event)"
-      />
-      <!-- 当前条目在子级里但子级被收起时，强制展开（不改变 collapsedSet，仅渲染） -->
-      <TocList
-        v-else-if="hasChildren(item) && isCollapsed(nodeKey(depth ?? 0, i)) && subtreeContainsCurrent(item.subitems, currentHref)"
+        v-if="hasChildren(item) && isExpanded(nodeKey(depth ?? 0, i), item)"
         :items="item.subitems!"
         :current-href="currentHref"
         :depth="(depth ?? 0) + 1"
