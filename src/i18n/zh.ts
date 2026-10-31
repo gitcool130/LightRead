@@ -11,6 +11,8 @@ export default {
   // ---- 通用 ----
   'common.cancel': '取消',
   'common.close': '关闭',
+  'common.expand': '展开',
+  'common.collapse': '收起',
   'common.delete': '删除',
   'common.edit': '编辑',
   'common.add': '添加',

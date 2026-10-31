@@ -135,7 +135,6 @@ const pageInput = ref('1')
 const scroller = ref<HTMLElement>()
 const pagedBox = ref<HTMLElement>()
 const rightPane = ref<HTMLElement>()
-const thumbnailScroller = ref<HTMLElement>()
 const pdfOpenInput = ref<HTMLInputElement>()
 let openingPdf = false
 let readerAlive = true
@@ -1282,13 +1281,12 @@ async function openExternal(url: string) {
 
 /* ================= 目录 (PDF 内嵌大纲) ================= */
 
-const tocOpen = ref(false)
-const thumbnailOpen = ref(false)
+const tocOpen = ref(true)
 const annoOpen = ref(false)
 const tocItems = ref<TocItem[]>([])
 const currentTocPage = ref(1)
 const currentTocOffsetPt = ref(0)
-const drawerOpen = computed(() => tocOpen.value || thumbnailOpen.value || annoOpen.value)
+const drawerOpen = computed(() => tocOpen.value || annoOpen.value)
 
 interface TocDestination {
   href: string
@@ -1369,17 +1367,16 @@ function scheduleCurrentTocPositionUpdate() {
   })
 }
 
-type DrawerTab = 'toc' | 'thumbnails' | 'annotations'
+type DrawerTab = 'toc' | 'annotations'
 
 function closeDrawer() {
   tocOpen.value = false
-  thumbnailOpen.value = false
   annoOpen.value = false
 }
 
 const lastDrawerTab = ref<DrawerTab>('toc')
 
-/** 顶栏侧栏开关: 目录 / 缩略图 / 划线想法共用一个入口, 打开时回到上次的标签 */
+/** 顶栏侧栏开关: 目录 / 划线想法共用一个入口, 打开时回到上次的标签 */
 function toggleSidebar() {
   if (drawerOpen.value) closeDrawer()
   else setDrawerTab(lastDrawerTab.value)
@@ -1388,12 +1385,11 @@ function toggleSidebar() {
 function setDrawerTab(tab: DrawerTab) {
   lastDrawerTab.value = tab
   tocOpen.value = tab === 'toc'
-  thumbnailOpen.value = tab === 'thumbnails'
   annoOpen.value = tab === 'annotations'
 }
 
 function toggleDrawerTab(tab: DrawerTab) {
-  const isOpen = tab === 'toc' ? tocOpen.value : tab === 'thumbnails' ? thumbnailOpen.value : annoOpen.value
+  const isOpen = tab === 'toc' ? tocOpen.value : annoOpen.value
   if (isOpen) closeDrawer()
   else setDrawerTab(tab)
 }
@@ -1473,158 +1469,9 @@ function resetDrawerWidth() {
   saveDrawerWidth()
 }
 
-/* ================= 页面缩略图 ================= */
-
-const THUMB_MAX_WIDTH = 210
-const THUMB_MAX_HEIGHT = 260
-const THUMB_CACHE_LIMIT = 56
-const thumbnailRendered = new Set<number>()
-const thumbnailQueued = new Set<number>()
-const thumbnailLastUsed = new Map<number, number>()
-const thumbnailQueue: number[] = []
-let thumbnailObserver: IntersectionObserver | null = null
-let thumbnailWorkerActive = false
-
-function thumbnailSizeOf(pageNum: number) {
-  const dims = dimensionsOf(pageNum)
-  const scale = Math.min(THUMB_MAX_WIDTH / dims.w, THUMB_MAX_HEIGHT / dims.h)
-  return {
-    w: Math.max(1, Math.round(dims.w * scale)),
-    h: Math.max(1, Math.round(dims.h * scale)),
-  }
-}
-
-function thumbnailFrameStyle(pageNum: number) {
-  const size = thumbnailSizeOf(pageNum)
-  return { width: `${size.w}px`, height: `${size.h}px` }
-}
-
-function thumbnailHolderOf(pageNum: number) {
-  return thumbnailScroller.value?.querySelector<HTMLElement>(`[data-thumbnail-page="${pageNum}"]`) ?? null
-}
-
-function trimThumbnailCache() {
-  if (thumbnailRendered.size <= THUMB_CACHE_LIMIT) return
-  const protectedStart = Math.max(1, currentPage.value - 8)
-  const protectedEnd = Math.min(pageCount.value, currentPage.value + 8)
-  const candidates = [...thumbnailRendered]
-    .filter(page => page < protectedStart || page > protectedEnd)
-    .sort((a, b) => (thumbnailLastUsed.get(a) ?? 0) - (thumbnailLastUsed.get(b) ?? 0))
-
-  while (thumbnailRendered.size > THUMB_CACHE_LIMIT && candidates.length) {
-    const page = candidates.shift()!
-    const holder = thumbnailHolderOf(page)
-    holder?.querySelector('.thumbnail-canvas')?.replaceChildren()
-    holder?.classList.remove('thumbnail-ready')
-    thumbnailRendered.delete(page)
-    thumbnailLastUsed.delete(page)
-    if (holder && thumbnailOpen.value) thumbnailObserver?.observe(holder)
-  }
-}
-
-async function drainThumbnailQueue() {
-  if (thumbnailWorkerActive) return
-  thumbnailWorkerActive = true
-  try {
-    while (thumbnailQueue.length && pdm) {
-      const pageNum = thumbnailQueue.shift()!
-      thumbnailQueued.delete(pageNum)
-      if (thumbnailRendered.has(pageNum)) continue
-      // 每页之间让出一帧，快速滚动缩略图时不会阻塞正文与工具栏交互。
-      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
-      if (!thumbnailOpen.value || !pdm) continue
-      const holder = thumbnailHolderOf(pageNum)
-      const slot = holder?.querySelector<HTMLElement>('.thumbnail-canvas')
-      if (!holder || !slot) continue
-      try {
-        const size = thumbnailSizeOf(pageNum)
-        // Retina 下保留清晰度，同时限制后台缩略图的长期内存占用。
-        const outputScale = Math.min(DPR(), 1.5)
-        const image = pdm.renderToSize(
-          pageNum - 1,
-          Math.max(1, Math.round(size.w * outputScale)),
-          Math.max(1, Math.round(size.h * outputScale)),
-        )
-        const canvas = document.createElement('canvas')
-        canvas.width = image.width
-        canvas.height = image.height
-        canvas.style.width = `${size.w}px`
-        canvas.style.height = `${size.h}px`
-        canvas.setAttribute('aria-hidden', 'true')
-        canvas.getContext('2d', { alpha: false })!.putImageData(image, 0, 0)
-        slot.replaceChildren(canvas)
-        holder.classList.add('thumbnail-ready')
-        thumbnailRendered.add(pageNum)
-        thumbnailLastUsed.set(pageNum, performance.now())
-        thumbnailObserver?.unobserve(holder)
-        trimThumbnailCache()
-      } catch (e) {
-        holder.classList.add('thumbnail-failed')
-        console.warn(`thumbnail render failed for page ${pageNum}:`, e)
-      }
-    }
-  } finally {
-    thumbnailWorkerActive = false
-  }
-}
-
-function queueThumbnail(pageNum: number, priority = false) {
-  if (
-    !pdm
-    || pageNum < 1
-    || pageNum > pageCount.value
-    || thumbnailRendered.has(pageNum)
-    || thumbnailQueued.has(pageNum)
-  ) return
-  thumbnailQueued.add(pageNum)
-  if (priority) thumbnailQueue.unshift(pageNum)
-  else thumbnailQueue.push(pageNum)
-  void drainThumbnailQueue()
-}
-
-function setupThumbnailObserver() {
-  thumbnailObserver?.disconnect()
-  const root = thumbnailScroller.value
-  if (!root || !thumbnailOpen.value) return
-  thumbnailObserver = new IntersectionObserver(entries => {
-    for (const entry of entries) {
-      if (!entry.isIntersecting) continue
-      const pageNum = Number((entry.target as HTMLElement).dataset.thumbnailPage)
-      if (Number.isFinite(pageNum)) queueThumbnail(pageNum)
-    }
-  }, { root, rootMargin: '420px 0px', threshold: 0.01 })
-  root.querySelectorAll<HTMLElement>('[data-thumbnail-page]').forEach(holder => {
-    const pageNum = Number(holder.dataset.thumbnailPage)
-    if (!thumbnailRendered.has(pageNum)) thumbnailObserver?.observe(holder)
-  })
-}
-
-function scrollActiveThumbnailIntoView() {
-  if (!thumbnailOpen.value) return
-  setupThumbnailObserver()
-  const holder = thumbnailHolderOf(currentPage.value)
-  holder?.scrollIntoView({ block: 'nearest' })
-  queueThumbnail(currentPage.value, true)
-}
-
-function thumbnailNavigate(pageNum: number) {
-  thumbnailLastUsed.set(pageNum, performance.now())
-  pushBack()
-  gotoPage(pageNum)
-}
-
-watch(thumbnailOpen, open => {
-  if (open) {
-    void nextTick(scrollActiveThumbnailIntoView)
-  } else {
-    thumbnailObserver?.disconnect()
-    thumbnailQueue.length = 0
-    thumbnailQueued.clear()
-  }
-})
+/* ================= 页面缩略图 (已移除) ================= */
 
 watch(currentPage, () => {
-  if (thumbnailOpen.value) void nextTick(scrollActiveThumbnailIntoView)
   void nextTick(updateCurrentTocPosition)
 })
 
@@ -4799,12 +4646,6 @@ onBeforeUnmount(() => {
   clearTimeout(wheelPageReset)
   clearTimeout(pdfSearchTimer)
   pdfSearchSession++
-  thumbnailObserver?.disconnect()
-  thumbnailObserver = null
-  thumbnailQueue.length = 0
-  thumbnailQueued.clear()
-  thumbnailRendered.clear()
-  thumbnailLastUsed.clear()
   window.removeEventListener('pointermove', onDragMove)
   window.removeEventListener('pointermove', onPanMove)
   window.removeEventListener('pointermove', onAnnoMove)
@@ -5422,14 +5263,6 @@ onBeforeUnmount(() => {
               v-if="!isFullscreen"
               type="button"
               role="tab"
-              :class="{ active: thumbnailOpen }"
-              :aria-selected="thumbnailOpen"
-              @click="setDrawerTab('thumbnails')"
-            >{{ t('reader.thumbnails') }}</button>
-            <button
-              v-if="!isFullscreen"
-              type="button"
-              role="tab"
               :class="{ active: annoOpen }"
               :aria-selected="annoOpen"
               @click="setDrawerTab('annotations')"
@@ -5445,30 +5278,6 @@ onBeforeUnmount(() => {
             @navigate="tocNavigate"
           />
           <p v-else class="drawer-empty">{{ t('paper.noOutline') }}</p>
-        </div>
-        <div
-          v-show="thumbnailOpen"
-          ref="thumbnailScroller"
-          class="drawer-body thumbnail-drawer"
-          role="tabpanel"
-        >
-          <button
-            v-for="pageNum in pageCount"
-            :key="pageNum"
-            type="button"
-            class="thumbnail-item"
-            :class="{ active: currentPage === pageNum }"
-            :data-thumbnail-page="pageNum"
-            :aria-current="currentPage === pageNum ? 'page' : undefined"
-            :aria-label="t('reader.thumbnailPage', { page: pageNum })"
-            @click="thumbnailNavigate(pageNum)"
-          >
-            <span class="thumbnail-sheet" :style="thumbnailFrameStyle(pageNum)">
-              <span class="thumbnail-skeleton" aria-hidden="true" />
-              <span class="thumbnail-canvas" />
-            </span>
-            <span class="thumbnail-number">{{ pageNum }}</span>
-          </button>
         </div>
         <div v-show="annoOpen" class="drawer-body">
           <p class="drawer-count">{{ t('reader.highlightsTab') }} · {{ highlights.length }}</p>
@@ -8034,98 +7843,6 @@ onBeforeUnmount(() => {
   text-align: center;
   padding: 24px 10px;
   line-height: 1.7;
-}
-.thumbnail-drawer {
-  padding: 14px 12px 28px;
-  scroll-behavior: smooth;
-  overscroll-behavior: contain;
-}
-.thumbnail-item {
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 8px 9px;
-  border: 1px solid transparent;
-  border-radius: 10px;
-  background: transparent;
-  color: var(--text-3);
-  cursor: pointer;
-  transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
-}
-.thumbnail-item + .thumbnail-item {
-  margin-top: 4px;
-}
-.thumbnail-item:hover {
-  background: color-mix(in srgb, var(--brand) 6%, var(--bg));
-  color: var(--text-2);
-}
-.thumbnail-item.active {
-  border-color: color-mix(in srgb, var(--brand) 24%, transparent);
-  background: color-mix(in srgb, var(--brand) 10%, var(--card));
-  color: var(--brand);
-}
-.thumbnail-item:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--brand) 62%, white);
-  outline-offset: -2px;
-}
-.thumbnail-sheet {
-  position: relative;
-  display: block;
-  max-width: 100%;
-  overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--border) 84%, #9aa6b5);
-  border-radius: 2px;
-  background: #fff;
-  box-shadow: 0 2px 7px rgba(34, 45, 61, 0.12);
-  transition: border-color 140ms ease, box-shadow 140ms ease;
-}
-.thumbnail-item.active .thumbnail-sheet {
-  border-color: color-mix(in srgb, var(--brand) 82%, white);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--brand) 16%, transparent), 0 3px 10px rgba(34, 45, 61, 0.14);
-}
-.thumbnail-skeleton,
-.thumbnail-canvas {
-  position: absolute;
-  inset: 0;
-  display: block;
-}
-.thumbnail-skeleton {
-  background:
-    linear-gradient(90deg, transparent 25%, var(--skeleton-shine) 50%, transparent 75%),
-    var(--skeleton);
-  background-size: 220% 100%, 100% 100%;
-  animation: thumbnail-shimmer 1.35s ease-in-out infinite;
-}
-.thumbnail-ready .thumbnail-skeleton {
-  display: none;
-}
-.thumbnail-canvas canvas {
-  display: block;
-  width: 100%;
-  height: 100%;
-}
-.thumbnail-failed .thumbnail-skeleton {
-  animation: none;
-  background: repeating-linear-gradient(135deg, var(--skeleton), var(--skeleton) 8px, var(--surface-3) 8px, var(--surface-3) 16px);
-}
-.thumbnail-number {
-  min-width: 28px;
-  padding: 1px 7px;
-  border-radius: 999px;
-  font-size: 11.5px;
-  font-variant-numeric: tabular-nums;
-  line-height: 1.5;
-  text-align: center;
-}
-.thumbnail-item.active .thumbnail-number {
-  background: color-mix(in srgb, var(--brand) 12%, transparent);
-  font-weight: 600;
-}
-@keyframes thumbnail-shimmer {
-  from { background-position: 130% 0, 0 0; }
-  to { background-position: -130% 0, 0 0; }
 }
 .anno-item {
   display: flex;

@@ -11,6 +11,8 @@ export default {
   // ---- 通用 ----
   'common.cancel': 'Cancel',
   'common.close': 'Close',
+  'common.expand': 'Expand',
+  'common.collapse': 'Collapse',
   'common.delete': 'Delete',
   'common.edit': 'Edit',
   'common.add': 'Add',
