@@ -3472,6 +3472,16 @@ onBeforeUnmount(() => {
 
     <!-- 侧栏面板 -->
     <aside v-if="panel !== 'none'" ref="panelEl" class="panel card" :style="panelStyle">
+      <!-- 关闭按钮: 固定在右上角, 各面板共用 -->
+      <button
+        type="button"
+        class="icon-btn panel-close"
+        :title="t('common.close')"
+        :aria-label="t('common.close')"
+        @click="panel = 'none'"
+      >
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M6.3 6.3a1 1 0 0 1 1.4 0L12 10.58l4.3-4.3a1 1 0 1 1 1.4 1.42L13.42 12l4.3 4.3a1 1 0 0 1-1.42 1.4L12 13.42l-4.3 4.3a1 1 0 0 1-1.4-1.42L10.58 12l-4.3-4.3a1 1 0 0 1 0-1.4z"/></svg>
+      </button>
       <!-- 拖拽把手: 拖动调宽, 双击循环档位 -->
       <div
         class="panel-splitter"
@@ -4027,9 +4037,16 @@ onBeforeUnmount(() => {
 .panel-splitter:focus-visible {
   outline: none;
 }
+.panel-close {
+  position: absolute;
+  top: 9px;
+  right: 9px;
+  z-index: 3;
+}
 .panel h3 {
   font-size: 14px;
   margin-bottom: 10px;
+  padding-right: 26px;
 }
 .panel-body {
   flex: 1;
@@ -4096,6 +4113,7 @@ onBeforeUnmount(() => {
   display: flex;
   gap: 4px;
   margin-bottom: 10px;
+  margin-right: 26px;
 }
 .anno-tabs button {
   flex: 1;
