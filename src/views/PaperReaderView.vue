@@ -1967,6 +1967,29 @@ async function commitAnnoText() {
   await storage.updateAnnotation(id, { cfi: rec.cfi, text: rec.text })
 }
 
+/** 拖动文字框右下角把手改大小: 拖动过程只改内存, 松手才落库 */
+function onNoteResize(id: string, dw: number, dh: number) {
+  const rec = annotations.value.find(a => a.id === id)
+  if (!rec) return
+  const d = decodeDraw(rec.cfi)
+  if (!d || d.t !== 'note') return
+  const dims = annoPageDims(d.p)
+  const w = Math.max(60, Math.min(d.w + dw, Math.max(60, dims.w - d.x)))
+  const h = Math.max(20, Math.min(d.h + dh, Math.max(20, dims.h - d.y)))
+  if (w === d.w && h === d.h) return
+  const next: NoteAnno = { ...d, w, h }
+  rec.cfi = encodeDraw(next)
+  if (annoSelected.value?.id === id) annoSelected.value = { id, d: next }
+}
+
+function onNoteResizeEnd() {
+  const sel = annoSelected.value
+  if (!sel) return
+  const rec = annotations.value.find(a => a.id === sel.id)
+  if (!rec) return
+  void getStorage().then(s => s.updateAnnotation(sel.id, { cfi: rec.cfi }))
+}
+
 async function deleteDrawAnno(id: string) {
   const storage = await getStorage()
   await storage.deleteAnnotation(id)
@@ -2003,6 +2026,26 @@ function pickAnnoColor(hex: string) {
 function pickAnnoWidth(px: number) {
   annoWidthPx.value = px
   void restyleSelectedAnno()
+}
+
+/** 选中文字框时的字号 (没选中文字框则为 0) */
+const selectedNoteFont = computed(() => (annoSelected.value?.d.t === 'note' ? annoSelected.value.d.s : 0))
+
+/** 调字号: 只对文字框有效, 立即落库 */
+async function bumpAnnoFont(delta: number) {
+  const sel = annoSelected.value
+  if (!sel || sel.d.t !== 'note') return
+  const s = Math.max(8, Math.min(48, Math.round(sel.d.s + delta)))
+  if (s === sel.d.s) return
+  // 字号变了, 框高跟着按比例走, 免得文字顶出边框
+  const h = Math.max(20, Math.round(sel.d.h * (s / sel.d.s)))
+  const next: NoteAnno = { ...sel.d, s, h }
+  const rec = annotations.value.find(a => a.id === sel.id)
+  if (!rec) return
+  rec.cfi = encodeDraw(next)
+  annoSelected.value = { id: sel.id, d: next }
+  const storage = await getStorage()
+  await storage.updateAnnotation(sel.id, { cfi: rec.cfi })
 }
 
 /** 切换圆弧半径系数; 选中态下同时改那条 arc 的 rf */
@@ -2058,9 +2101,18 @@ function onAnnoPointerDown(e: PointerEvent, page: number) {
   }
 
   if (tool === 'note') {
-    // 正在编辑就先收尾 (点空白处 = 保存), 否则在点到的位置落一个新文字框
+    // 正在编辑就先收尾 (点空白处 = 保存)
     if (annoEditingId.value) {
       void commitAnnoText()
+      return
+    }
+    // 点到已有文字框: 选中并准备拖动, 不再叠一个新框
+    const hit = annoHitAt(page, pt)
+    if (hit && hit.d.t === 'note') {
+      annoSelected.value = { id: hit.id, d: hit.d }
+      annoDrag = { page, tool: 'select', start: pt, last: pt, moved: false, id: hit.id, orig: hit.d }
+      window.addEventListener('pointermove', onAnnoMove)
+      window.addEventListener('pointerup', onAnnoUp, { once: true })
       return
     }
     void createNoteAnno(page, pt)
@@ -5419,6 +5471,26 @@ onBeforeUnmount(() => {
               >{{ rf }}</button>
             </div>
           </template>
+          <template v-if="annoSelected?.d.t === 'note'">
+            <span class="anno-tray-sep" />
+            <div class="anno-tray-row anno-tray-font" role="group" :aria-label="t('reader.annoFontSize')">
+              <button
+                type="button"
+                class="anno-font-btn"
+                :title="t('reader.annoFontSmaller')"
+                :aria-label="t('reader.annoFontSmaller')"
+                @click="bumpAnnoFont(-1)"
+              >A－</button>
+              <span class="anno-font-val">{{ selectedNoteFont }}</span>
+              <button
+                type="button"
+                class="anno-font-btn"
+                :title="t('reader.annoFontLarger')"
+                :aria-label="t('reader.annoFontLarger')"
+                @click="bumpAnnoFont(1)"
+              >A＋</button>
+            </div>
+          </template>
           <button
             v-if="annoSelected"
             type="button"
@@ -5613,6 +5685,8 @@ onBeforeUnmount(() => {
                   :interactive="annoActive"
                   @text-input="onAnnoTextInput"
                   @text-commit="commitAnnoText"
+                  @note-resize="onNoteResize"
+                  @note-resize-end="onNoteResizeEnd"
                 />
               </div>
               <div class="p-links" />
@@ -5723,6 +5797,8 @@ onBeforeUnmount(() => {
                   :interactive="annoActive"
                   @text-input="onAnnoTextInput"
                   @text-commit="commitAnnoText"
+                  @note-resize="onNoteResize"
+                  @note-resize-end="onNoteResizeEnd"
                 />
               </div>
               <div class="p-links" />
@@ -7601,6 +7677,29 @@ onBeforeUnmount(() => {
 .anno-radius.active {
   background: color-mix(in srgb, var(--brand) 12%, transparent);
   color: var(--brand);
+}
+/* 文字框字号调节 */
+.anno-font-btn {
+  height: 30px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--fs-small);
+  line-height: 1;
+  cursor: pointer;
+}
+.anno-font-btn:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.anno-font-val {
+  min-width: 20px;
+  text-align: center;
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
 }
 .anno-tray-del {
   padding: 2px var(--space-2);

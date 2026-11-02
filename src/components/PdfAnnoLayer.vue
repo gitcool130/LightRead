@@ -31,6 +31,9 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'text-input', value: string): void
   (e: 'text-commit'): void
+  /** 拖动右下角把手改文字框大小, 增量已换算成页坐标 */
+  (e: 'note-resize', id: string, dw: number, dh: number): void
+  (e: 'note-resize-end'): void
 }>()
 
 const viewBox = computed(() => `0 0 ${Math.max(1, props.w)} ${Math.max(1, props.h)}`)
@@ -97,6 +100,36 @@ const onEditKeydown = (e: KeyboardEvent) => {
     e.preventDefault()
     emit('text-commit')
   }
+}
+
+/* ---- 文字框缩放手柄: 拖右下角改宽高 ---- */
+let noteResize: { id: string; lastX: number; lastY: number } | null = null
+
+function startNoteResize(e: PointerEvent, id: string) {
+  e.preventDefault()
+  e.stopPropagation()
+  noteResize = { id, lastX: e.clientX, lastY: e.clientY }
+  window.addEventListener('pointermove', onNoteResizeMove)
+  window.addEventListener('pointerup', onNoteResizeUp, { once: true })
+  window.addEventListener('pointercancel', onNoteResizeUp, { once: true })
+}
+
+function onNoteResizeMove(e: PointerEvent) {
+  if (!noteResize) return
+  e.preventDefault()
+  const dw = (e.clientX - noteResize.lastX) / Math.max(0.01, props.sx)
+  const dh = (e.clientY - noteResize.lastY) / Math.max(0.01, props.sy)
+  noteResize.lastX = e.clientX
+  noteResize.lastY = e.clientY
+  if (!dw && !dh) return
+  emit('note-resize', noteResize.id, dw, dh)
+}
+
+function onNoteResizeUp() {
+  window.removeEventListener('pointermove', onNoteResizeMove)
+  if (!noteResize) return
+  noteResize = null
+  emit('note-resize-end')
 }
 </script>
 
@@ -270,6 +303,13 @@ const onEditKeydown = (e: KeyboardEvent) => {
         @blur="emit('text-commit')"
       />
       <template v-else>{{ it.d.text }}</template>
+      <!-- 选中且不在编辑时, 右下角出现缩放手柄 -->
+      <span
+        v-if="it.id === activeId && it.id !== editingId"
+        class="anno-note-resize"
+        aria-hidden="true"
+        @pointerdown="startNoteResize($event, it.id)"
+      />
     </div>
 
     <div v-if="activeBox" class="anno-sel" :style="activeBox" aria-hidden="true" />
@@ -321,6 +361,20 @@ const onEditKeydown = (e: KeyboardEvent) => {
   background: transparent;
   font: inherit;
   line-height: 1.35;
+  pointer-events: auto;
+}
+.anno-note-resize {
+  position: absolute;
+  right: -6px;
+  bottom: -6px;
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid var(--brand);
+  border-radius: 3px;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  cursor: nwse-resize;
+  touch-action: none;
   pointer-events: auto;
 }
 .anno-sel {

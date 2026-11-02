@@ -305,6 +305,47 @@ try {
   await page.waitForTimeout(200)
   assert.equal(await page.locator('.am-panel').count(), 0, '背景音面板应该能收起')
 
+  // 8.6 文字框: 选中后可拖动位置, 右下角把手可改大小
+  // 工具盘在 8 步已 Esc 收起, 这里重新打开
+  await page.locator('button[title="批注"]').click()
+  await page.locator('.anno-tray').waitFor({ timeout: 4000 })
+  await pickTool('选择')
+
+  /** 文字框相对页面左上角的几何, 不受侧栏开合影响 */
+  const noteGeom = () => page.evaluate(() => {
+    const box = document.querySelector('.anno-text-box')
+    const holder = document.querySelector('.p-holder')
+    if (!box || !holder) return null
+    const b = box.getBoundingClientRect()
+    const h = holder.getBoundingClientRect()
+    return { x: b.x - h.x, y: b.y - h.y, w: b.width, h: b.height }
+  })
+
+  const noteBox = page.locator('.anno-text-box').first()
+  const nb0 = await noteGeom()
+  const box0 = await noteBox.boundingBox()
+  await page.mouse.click(box0.x + 12, box0.y + 8)
+  await page.locator('.anno-note-resize').waitFor({ timeout: 3000 })
+  assert.ok(await page.locator('.anno-note-resize').isVisible(), '选中文字框应出现缩放手柄')
+
+  const handle = await page.locator('.anno-note-resize').boundingBox()
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(handle.x + 60, handle.y + 40, { steps: 8 })
+  await page.mouse.up()
+  await page.waitForTimeout(260)
+  const nb1 = await noteGeom()
+  assert.ok(nb1.w - nb0.w > 20, `拖手柄应加宽文字框: ${nb0.w} -> ${nb1.w}`)
+
+  const box1 = await noteBox.boundingBox()
+  await page.mouse.move(box1.x + 10, box1.y + 8)
+  await page.mouse.down()
+  await page.mouse.move(box1.x + 50, box1.y + 38, { steps: 8 })
+  await page.mouse.up()
+  await page.waitForTimeout(260)
+  const nb2 = await noteGeom()
+  assert.ok(nb2.x - nb1.x > 15, `拖框体应改变位置: ${nb1.x} -> ${nb2.x}`)
+
   const shot = join(tmpdir(), 'lightread-pdf-anno.png')
   await page.screenshot({ path: shot })
 
@@ -316,6 +357,9 @@ try {
   assert.ok(await filledRects() >= 1, '刷新后荧光笔铺色也应该还在')
   assert.equal(await page.locator('.anno-text-box').count(), 1, '刷新后文字批注也应该还在')
   assert.match(await page.locator('.anno-text-box').first().innerText(), /论证/)
+  const nbReload = await noteGeom()
+  assert.ok(Math.abs(nbReload.w - nb2.w) < 8, `文字框大小应该落库, 刷新后还原: ${nb2.w} -> ${nbReload.w}`)
+  assert.ok(Math.abs(nbReload.x - nb2.x) < 8, `文字框位置应该落库, 刷新后还原: ${nb2.x} -> ${nbReload.x}`)
   assert.equal(await page.locator('.p-hl-rect.p-hl-line').count(), 2, '刷新后下划线与删除线也应该还在')
   assert.equal(await page.locator('.p-note-pin').count(), 1, '刷新后笔记气泡也应该还在')
   await page.locator('.p-note-pin').first().click()
@@ -336,7 +380,10 @@ try {
   assert.ok(Math.abs(pinReloaded.y - pinDragged.y) < 6, '气泡位置应该落库, 刷新后还在原处')
 
   // 10. 笔记抽屉列出绘图批注
-  await page.locator('button[title="目录"]').click()
+  // 目录栏自 2026-10-31 起默认展开, 所以只在它关着的时候才需要点开
+  if (!(await page.locator('.side-drawer').isVisible())) {
+    await page.locator('button[title="目录"]').click()
+  }
   await page.locator('.drawer-tabs button', { hasText: '划线想法' }).click()
   await page.waitForTimeout(200)
   const items = await page.locator('.drawer-body .anno-item').count()
