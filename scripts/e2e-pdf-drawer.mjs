@@ -46,8 +46,12 @@ try {
   await page.locator('.p-holder canvas').first().waitFor()
   await page.waitForTimeout(800)
 
-  // 打开侧栏 (顶栏左侧带 aria-pressed 的目录按钮)
-  await page.locator('.topbar-start button[aria-pressed]').click()
+  // 打开侧栏 (顶栏左侧带 aria-pressed 的目录按钮); 目录栏自 2026-10-31 起默认展开,
+  // 只有在它关着的时候才点开 —— 否则这一点反而会把抽屉关上
+  const drawerToggle = page.locator('.topbar-start button[aria-pressed]')
+  if ((await drawerToggle.getAttribute('aria-pressed')) !== 'true') {
+    await drawerToggle.click()
+  }
   const drawer = page.locator('.side-drawer')
   await drawer.waitFor({ state: 'visible' })
   await page.waitForTimeout(300)
@@ -103,7 +107,10 @@ try {
   await page.reload()
   await page.locator('.p-holder canvas').first().waitFor()
   await page.waitForTimeout(500)
-  await page.locator('.topbar-start button[aria-pressed]').click()
+  // 重开后目录栏可能本来就是展开的, 只在关着时点开
+  if ((await page.locator('.topbar-start button[aria-pressed]').getAttribute('aria-pressed')) !== 'true') {
+    await page.locator('.topbar-start button[aria-pressed]').click()
+  }
   await drawer.waitFor({ state: 'visible' })
   await page.waitForTimeout(300)
   const restored = (await drawer.boundingBox())?.width ?? 0

@@ -53,6 +53,7 @@ import {
   type Pt,
 } from '../services/pdfAnno'
 import PdfAnnoLayer from '../components/PdfAnnoLayer.vue'
+import HanziCard from '../components/HanziCard.vue'
 import { loadHanziDict, lookupHanzi, type HanziEntry } from '../services/hanzi'
 import { importFile } from '../services/importer'
 import { detectFormat } from '../services/format'
@@ -725,6 +726,8 @@ async function applyZoom(next: PdfZoom, remember = true) {
 }
 
 function zoomStep(dir: 1 | -1) {
+  // 缩放菜单开着时, +/− 也要一次生效, 不能先被遮罩吃掉一次点击
+  zoomMenu.value = false
   const cur = typeof zoom.value === 'number' ? zoom.value : curScale.value / CSS_PX_PER_PT
   const fuzz = 0.0001
   const next = dir > 0
@@ -864,10 +867,23 @@ function pickZoom(z: PdfZoom) {
   void applyZoom(z)
 }
 
+/**
+ * 点顶栏其它按钮时顺手收起缩放菜单。
+ * 顶栏现在压在遮罩之上 (见 .pdf-topbar 的 z-index)，不这么做菜单会一直挂着。
+ */
+function onTopbarClick(e: MouseEvent) {
+  if (!zoomMenu.value) return
+  if ((e.target as HTMLElement).closest?.('.dock-zoom')) return
+  zoomMenu.value = false
+}
+
 /* 顶栏宽度分档: 宽度不够时右侧按钮只留图标, 再窄把听书 / 自动翻页收进「更多」 */
 const topbar = ref<HTMLElement>()
 const topbarWidth = ref(Number.POSITIVE_INFINITY)
-const topbarCompact = computed(() => topbarWidth.value < 1220)
+/* 顶栏宽度分档: 宽度不够时右侧按钮只留图标, 再窄把听书 / 自动翻页收进「更多」。
+ * 阈值要留出右侧栏的最小占位: 右侧栏 justify-content: flex-end, 一旦内容比列宽就会
+ * 向左溢出, 把中间的缩放 +/− 盖住 (2026-11-03 加「查」后踩到过)。 */
+const topbarCompact = computed(() => topbarWidth.value < 1340)
 const topbarNarrow = computed(() => topbarWidth.value < 980)
 /** 网页版在手机宽度下也用桌面界面: 放不下一行时翻页 / 缩放换到第二行 */
 const topbarStacked = computed(() => topbarWidth.value < 600)
@@ -4797,6 +4813,7 @@ onBeforeUnmount(() => {
         :class="{ compact: topbarCompact, stacked: topbarStacked }"
         role="toolbar"
         :aria-label="t('reader.toolbar')"
+        @click="onTopbarClick"
       >
         <div class="topbar-start">
           <button type="button" class="top-icon document-back" :title="backLabel" :aria-label="backLabel" @click="router.push(backTarget)">
@@ -6116,36 +6133,13 @@ onBeforeUnmount(() => {
     </div>
 
     <!-- 查字浮卡: 汉字拼音 + 释义 (本地词典) -->
-    <div
+    <HanziCard
       v-if="lookupCard"
-      class="hanzi-card card"
-      :style="{ left: `${lookupCard.x}px`, top: `${lookupCard.y}px` }"
-      role="dialog"
-      :aria-label="t('reader.lookupTitle')"
-    >
-      <div class="hanzi-head">
-        <strong>{{ t('reader.lookupTitle') }}</strong>
-        <span class="hanzi-count">{{ lookupCard.entries.length }}{{ t('reader.lookupChars') }}</span>
-        <span style="flex: 1" />
-        <button
-          class="icon-btn"
-          :title="t('common.close')"
-          :aria-label="t('common.close')"
-          @click="closeLookup"
-        >
-          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M6.3 6.3a1 1 0 0 1 1.4 0L12 10.58l4.3-4.3a1 1 0 1 1 1.4 1.42L13.42 12l4.3 4.3a1 1 0 0 1-1.42 1.4L12 13.42l-4.3 4.3a1 1 0 0 1-1.4-1.42L10.58 12l-4.3-4.3a1 1 0 0 1 0-1.4z"/></svg>
-        </button>
-      </div>
-      <div class="hanzi-list">
-        <div v-for="e in lookupCard.entries" :key="e.char" class="hanzi-item">
-          <div class="hanzi-char-row">
-            <span class="hanzi-char">{{ e.char }}</span>
-            <span class="hanzi-pinyin">{{ e.pinyin || t('reader.lookupNoEntry') }}</span>
-          </div>
-          <p class="hanzi-def">{{ e.def || t('reader.lookupNoEntry') }}</p>
-        </div>
-      </div>
-    </div>
+      :entries="lookupCard.entries"
+      :x="lookupCard.x"
+      :y="lookupCard.y"
+      @close="closeLookup"
+    />
 
     <!-- 划词翻译浮卡 (流式) -->
     <div v-if="selTr" class="sel-tr card" :style="{ left: `${selTrPos.x}px`, top: `${selTrPos.y}px` }">
@@ -6558,7 +6552,9 @@ onBeforeUnmount(() => {
 }
 .paper-header {
   position: relative;
-  z-index: 50;
+  /* 必须高过弹层遮罩 (.zoom-backdrop 69), 否则菜单一开, 顶栏整条被遮罩吃掉点击,
+     缩放 +/− 要连点两次才生效。弹层本身 71, 仍在上层。 */
+  z-index: 70;
   flex: 0 0 auto;
   padding: var(--lr-safe-top) var(--lr-safe-right) 0 var(--lr-safe-left);
   background: var(--card);
@@ -6649,6 +6645,9 @@ onBeforeUnmount(() => {
   padding: 0 12px;
   background: var(--card);
   border-bottom: 1px solid var(--border);
+  /* 压在弹层遮罩 (69) 之上、高于弹层 (71) 之下, 保证顶栏按钮始终可点 */
+  position: relative;
+  z-index: 70;
 }
 .topbar-start,
 .topbar-end {
@@ -6657,12 +6656,14 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 4px;
 }
-.topbar-start {
-  grid-area: start;
-}
 .topbar-end {
   grid-area: end;
   justify-content: flex-end;
+  /* 兜底: 内容再宽也不许往左溢出压住缩放按钮 */
+  overflow: hidden;
+}
+.topbar-start {
+  grid-area: start;
 }
 .topbar-center {
   grid-area: center;
@@ -6741,6 +6742,16 @@ onBeforeUnmount(() => {
   font-size: 12px;
   font-weight: 500;
   line-height: 1;
+}
+/* 顶栏挤的时候「查」退回纯图标, 不跟缩放控件抢位置 */
+.pdf-topbar.compact .top-lookup,
+.pdf-topbar.stacked .top-lookup {
+  width: 34px;
+  padding: 0;
+}
+.pdf-topbar.compact .top-lookup-label,
+.pdf-topbar.stacked .top-lookup-label {
+  display: none;
 }
 .top-icon svg,
 .top-btn svg {
@@ -7357,7 +7368,8 @@ onBeforeUnmount(() => {
 .zoom-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 70;
+  /* 要比顶栏低一层: 菜单开着时 +/− 仍要能一次点中 */
+  z-index: 69;
 }
 .shortcut-menu {
   position: absolute;
@@ -8282,68 +8294,6 @@ onBeforeUnmount(() => {
 }
 
 /* ---- 划词翻译浮卡 ---- */
-/* ---- 查字浮卡 ---- */
-.hanzi-card {
-  position: fixed;
-  z-index: 72;
-  width: min(300px, calc(100vw - 24px));
-  max-height: min(60vh, 420px);
-  display: flex;
-  flex-direction: column;
-  padding: 10px 12px;
-  border-radius: 10px;
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);
-}
-.hanzi-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  color: var(--text-2);
-  padding-bottom: 6px;
-  border-bottom: 1px solid var(--border);
-}
-.hanzi-count {
-  font-size: 12px;
-  color: var(--text-3);
-}
-.hanzi-list {
-  overflow: auto;
-  padding-top: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.hanzi-item {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.hanzi-char-row {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-}
-.hanzi-char {
-  font-size: 24px;
-  line-height: 1.1;
-  color: var(--text);
-  font-family: var(--font-serif, serif);
-}
-.hanzi-pinyin {
-  font-size: 13px;
-  color: var(--brand);
-  letter-spacing: 0.02em;
-}
-.hanzi-def {
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.55;
-  color: var(--text-2);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
 .sel-tr {
   position: fixed;
   z-index: 71;

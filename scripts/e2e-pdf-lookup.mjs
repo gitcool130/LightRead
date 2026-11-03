@@ -81,6 +81,17 @@ try {
   const cardText2 = await page.locator('.hanzi-card').innerText()
   assert.ok(cardText2.includes('乾') || cardText2.includes('彖'), `第二个卡片应列出选区汉字: ${cardText2.slice(0, 80)}`)
 
+  // 5. 回归: 缩放比例菜单开着时, 顶栏 + 必须一次点中 (曾被弹层遮罩吃掉第一次点击)
+  const zoomLabel = () => page.locator('.dock-zoom span').first().innerText()
+  await page.locator('.dock-zoom').first().click()
+  await page.waitForTimeout(250)
+  assert.equal(await page.locator('.zoom-menu').count(), 1, '缩放比例菜单应打开')
+  const before = await zoomLabel()
+  await page.locator('.top-cluster .top-icon').last().click()
+  await page.waitForTimeout(500)
+  assert.equal(await page.locator('.zoom-menu').count(), 0, '点 + 后缩放菜单应收起')
+  assert.notEqual(await zoomLabel(), before, '菜单开着时点 + 也要真的放大')
+
   const shot = join(tmpdir(), 'lightread-pdf-lookup.png')
   await page.screenshot({ path: shot })
   assert.deepEqual(errors, [], `页面报错: ${errors.join(' / ')}`)

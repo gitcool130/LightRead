@@ -1,7 +1,7 @@
 {
   "name": "lightread",
   "private": true,
-  "version": "2.6.2",
+  "version": "2.7.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -90,7 +90,8 @@
     "e2e:mobile-messages": "node scripts/e2e-mobile-messages.mjs",
     "test:zh-segment-wasm": "node --experimental-strip-types --test scripts/test-zh-segment-wasm.mjs",
     "test:hanzi": "node --experimental-strip-types --test scripts/test-hanzi.mjs",
-    "e2e:pdf-lookup": "node scripts/e2e-pdf-lookup.mjs"
+    "e2e:pdf-lookup": "node scripts/e2e-pdf-lookup.mjs",
+    "e2e:epub-lookup": "node scripts/e2e-epub-lookup.mjs"
   },
   "dependencies": {
     "@embedpdf/pdfium": "^2.14.4",

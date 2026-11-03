@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import AppSelect from '../components/AppSelect.vue'
+import HanziCard from '../components/HanziCard.vue'
+import { loadHanziDict, lookupHanzi, type HanziEntry } from '../services/hanzi'
 import { pingUsage } from '../services/usageStats'
 import { noteDjReading } from '../services/usageCounters'
 import type { DjLevelIdx, DjState } from '../services/usageStatsCore'
@@ -251,6 +253,68 @@ watch(panel, async p => {
 
 // 高亮选区
 const selection = ref<{ cfi: string; text: string } | null>(null)
+
+/* ================= 查字: 汉字拼音 + 释义 (本地词典, 不联网) ================= */
+const lookupMode = ref(false)
+const lookupCard = ref<{ entries: HanziEntry[]; x: number; y: number } | null>(null)
+/** 最近一次选区的视口锚点, 划词工具条里的「查」用它定位卡片 */
+const lastSelAnchor = ref({ x: 0, y: 0 })
+
+async function openLookup(text: string, anchor: { x: number; y: number }) {
+  const raw = text.trim()
+  if (!raw) return
+  lookupMode.value = true
+  const entries = await lookupHanzi(raw)
+  if (!entries.length) {
+    toast(t('reader.lookupEmpty'), 'error', 3000)
+    return
+  }
+  lookupCard.value = {
+    entries,
+    x: Math.min(Math.max(12, anchor.x - 150), window.innerWidth - 312),
+    y: Math.min(anchor.y + 10, window.innerHeight - 220),
+  }
+}
+
+function closeLookup() {
+  lookupCard.value = null
+}
+
+function toggleLookup() {
+  lookupMode.value = !lookupMode.value
+  if (!lookupMode.value) {
+    lookupCard.value = null
+    return
+  }
+  void loadHanziDict()
+  toast(t('reader.lookupOn'), 'info', 2600)
+}
+
+/** 划词工具条里的「查」: 直接查当前选区 */
+function lookupSelection() {
+  const s = selection.value
+  if (!s) return
+  const anchor = lastSelAnchor.value
+  selection.value = null
+  window.getSelection()?.removeAllRanges()
+  void openLookup(s.text, anchor)
+}
+
+/** iframe 里的选区 → 视口坐标 */
+function selectionAnchor(doc: Document): { x: number; y: number } {
+  try {
+    const range = doc.getSelection()?.getRangeAt(0)
+    const r = range?.getBoundingClientRect()
+    const frame = (doc.defaultView?.frameElement as HTMLElement | null)?.getBoundingClientRect()
+    return {
+      x: (frame?.left ?? 0) + (r ? r.left + r.width / 2 : 0),
+      y: (frame?.top ?? 0) + (r?.bottom ?? 0),
+    }
+  } catch {
+    return { x: window.innerWidth / 2, y: window.innerHeight / 3 }
+  }
+}
+
 const annotations = ref<AnnotationRec[]>([])
 const activeAnnotation = ref<AnnotationRec | null>(null)
 const noteDraft = ref('')
@@ -2095,6 +2159,16 @@ function onSectionLoad(e: CustomEvent) {
       selection.value = null
       return
     }
+    // 查字模式: 选中即查, 不再弹划词工具条
+    if (lookupMode.value) {
+      const anchor = selectionAnchor(doc)
+      lastSelAnchor.value = anchor
+      sel.removeAllRanges()
+      selection.value = null
+      void openLookup(text, anchor)
+      return
+    }
+    lastSelAnchor.value = selectionAnchor(doc)
     try {
       const cfi = view.getCFI(index, sel.getRangeAt(0))
       selectionRange = sel.getRangeAt(0).cloneRange()
@@ -3055,6 +3129,16 @@ onBeforeUnmount(() => {
           <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 3a1 1 0 0 1 1 1v16a1 1 0 1 1-2 0V4a1 1 0 0 1 1-1zM8 7a1 1 0 0 1 1 1v8a1 1 0 1 1-2 0V8a1 1 0 0 1 1-1zm8 0a1 1 0 0 1 1 1v8a1 1 0 1 1-2 0V8a1 1 0 0 1 1-1zM4 10a1 1 0 0 1 1 1v2a1 1 0 1 1-2 0v-2a1 1 0 0 1 1-1zm16 0a1 1 0 0 1 1 1v2a1 1 0 1 1-2 0v-2a1 1 0 0 1 1-1z"/></svg>
           <span v-if="ambient.state.playing" class="ambient-dot" aria-hidden="true" />
         </button>
+        <button
+          class="icon-btn lookup-btn"
+          :class="{ 'auto-on': lookupMode }"
+          :title="t('reader.lookupHint')"
+          :aria-label="t('reader.lookup')"
+          :aria-pressed="lookupMode"
+          @click="toggleLookup"
+        >
+          <span class="lookup-glyph" aria-hidden="true">查</span>
+        </button>
         <button class="icon-btn" :title="t('reader.searchInBook')" @click="togglePanel('search')">
           <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M10.5 3a7.5 7.5 0 1 0 4.55 13.46l3.75 3.75a1 1 0 0 0 1.4-1.42l-3.74-3.74A7.5 7.5 0 0 0 10.5 3zM5 10.5a5.5 5.5 0 1 1 11 0 5.5 5.5 0 0 1-11 0z"/></svg>
         </button>
@@ -3262,6 +3346,7 @@ onBeforeUnmount(() => {
         @click="addHighlight(name as string)"
       />
       <button class="btn btn-sm" @click="addHighlight('yellow', true)"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M5 4h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H10l-4.3 3.4A1 1 0 0 1 4 19.6V6a2 2 0 0 1 1-2zm1 2v11.5L9.3 15H19V6H6zm2 2.5h8a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2zm0 3h5a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2z"/></svg>{{ t('reader.writeNote') }}</button>
+      <button class="btn btn-sm" @click="lookupSelection">{{ t('reader.lookupTitle') }}</button>
       <button class="btn btn-sm" @click="aiExplainSelection"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M10 3a1 1 0 0 1 .95.68l1.3 3.9a3 3 0 0 0 1.9 1.9l3.9 1.3a1 1 0 0 1 0 1.9l-3.9 1.3a3 3 0 0 0-1.9 1.9l-1.3 3.9a1 1 0 0 1-1.9 0l-1.3-3.9a3 3 0 0 0-1.9-1.9l-3.9-1.3a1 1 0 0 1 0-1.9l3.9-1.3a3 3 0 0 0 1.9-1.9l1.3-3.9A1 1 0 0 1 10 3zm8-1a1 1 0 0 1 .95.68l.4 1.2.97.32a1 1 0 0 1 0 1.9l-.97.32-.4 1.2a1 1 0 0 1-1.9 0l-.4-1.2-.97-.32a1 1 0 0 1 0-1.9l.97-.32.4-1.2A1 1 0 0 1 18 2z"/></svg>{{ t('ai.explain') }}</button>
       <button v-if="dj.selectionKey.value" class="btn btn-sm" @click="dj.openKeyCard(); selection = null">{{ t('dianjing.why') }}</button>
       <button v-if="!fixedLayout" class="btn btn-sm" @click="listenFromSelection"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 3a7 7 0 0 0-7 7v1.1A3.5 3.5 0 0 0 3 14.5v2A3.5 3.5 0 0 0 6.5 20H8a1 1 0 0 0 1-1v-7a1 1 0 0 0-1-1h-.9A5 5 0 0 1 12 5a5 5 0 0 1 4.9 6H16a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h1.5a3.5 3.5 0 0 0 3.5-3.5v-2a3.5 3.5 0 0 0-2-3.16V10a7 7 0 0 0-7-7z"/></svg>{{ t('tts.listenFromSelection') }}</button>
@@ -3269,6 +3354,14 @@ onBeforeUnmount(() => {
       <button v-if="settings.features.transfer" class="btn btn-sm" @click="sendSelectionToDevices(selection.text, meta?.title); selection = null"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 3 10 14M21 3l-7 18-4-7-7-4z"/></svg>{{ t('transfer.sendToDevices') }}</button>
       <button class="icon-btn" :title="t('common.cancel')" :aria-label="t('common.cancel')" @click="selection = null"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M6.3 6.3a1 1 0 0 1 1.4 0L12 10.58l4.3-4.3a1 1 0 1 1 1.4 1.42L13.42 12l4.3 4.3a1 1 0 0 1-1.42 1.4L12 13.42l-4.3 4.3a1 1 0 0 1-1.4-1.42L10.58 12l-4.3-4.3a1 1 0 0 1 0-1.4z"/></svg></button>
     </div>
+
+    <HanziCard
+      v-if="lookupCard"
+      :entries="lookupCard.entries"
+      :x="lookupCard.x"
+      :y="lookupCard.y"
+      @close="closeLookup"
+    />
 
     <!-- 标注详情 / 想法编辑浮层 -->
     <div v-if="activeAnnotation" class="annotation-pop card">
@@ -3752,6 +3845,12 @@ onBeforeUnmount(() => {
 .icon-btn:hover {
   background: var(--bg);
   color: var(--brand);
+}
+/* 查字按钮: 用「查」字本身当图标, 一眼能认出 */
+.lookup-glyph {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1;
 }
 /* 正文让出状态栏 / 手势条 / 横屏刘海; 阅读背景仍铺满整屏 */
 .content {
