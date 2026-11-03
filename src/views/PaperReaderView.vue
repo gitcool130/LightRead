@@ -53,6 +53,7 @@ import {
   type Pt,
 } from '../services/pdfAnno'
 import PdfAnnoLayer from '../components/PdfAnnoLayer.vue'
+import { loadHanziDict, lookupHanzi, type HanziEntry } from '../services/hanzi'
 import { importFile } from '../services/importer'
 import { detectFormat } from '../services/format'
 import { FONT_FAMILIES, HIGHLIGHT_COLORS, READER_THEME_CHOICES, resolveReaderColors } from '../services/readerTheme'
@@ -1518,6 +1519,58 @@ interface SelInfo {
 const selection = ref<SelInfo | null>(null)
 /** 最近用过的批注色: 下划线 / 删除线 / 写笔记沿用, 点色块则切色 */
 const markColor = ref('yellow')
+
+/* ================= 查字: 汉字拼音 + 释义 (本地词典, 不联网) ================= */
+const lookupMode = ref(false)
+const lookupCard = ref<{ entries: HanziEntry[]; x: number; y: number } | null>(null)
+const lookupBusy = ref(false)
+
+/** 查一段文字里的汉字, 结果放到浮卡里 */
+async function openLookup(text: string, anchor: { x: number; y: number }) {
+  const raw = text.trim()
+  if (!raw) return
+  lookupBusy.value = true
+  lookupMode.value = true
+  try {
+    const entries = await lookupHanzi(raw)
+    if (!entries.length) {
+      toast(t('reader.lookupEmpty'), 'error', 3000)
+      return
+    }
+    lookupCard.value = {
+      entries,
+      x: Math.min(Math.max(12, anchor.x - 150), window.innerWidth - 312),
+      y: Math.min(anchor.y + 10, window.innerHeight - 220),
+    }
+  } finally {
+    lookupBusy.value = false
+  }
+}
+
+function closeLookup() {
+  lookupCard.value = null
+}
+
+/** 顶栏「查」: 打开查字模式, 此后选中文字直接出卡片 */
+function toggleLookup() {
+  lookupMode.value = !lookupMode.value
+  if (!lookupMode.value) {
+    lookupCard.value = null
+    return
+  }
+  void loadHanziDict()
+  toast(t('reader.lookupOn'), 'info', 2600)
+}
+
+/** 划词工具条里的「查」: 直接查当前选区 */
+function lookupSelection() {
+  const s = selection.value
+  if (!s) return
+  window.getSelection()?.removeAllRanges()
+  selection.value = null
+  void openLookup(s.text, s.anchor)
+}
+
 const annotations = ref<AnnotationRec[]>([])
 const activeAnnotation = ref<AnnotationRec | null>(null)
 const noteDraft = ref('')
@@ -2875,17 +2928,20 @@ function finishPdmSelection(page: number, a: number, b: number) {
   const display = displaySizeOf(page)
   const last = rects[rects.length - 1]
   liveSel.value = { page, a, b }
-  selection.value = {
-    text,
-    page,
-    rects,
-    anchor: hb
-      ? {
-          x: Math.min(hb.left + (last.x + last.w) * display.sx, window.innerWidth - 20),
-          y: hb.top + (last.y + last.h) * display.sy,
-        }
-      : { x: window.innerWidth / 2, y: window.innerHeight / 2 },
+  const anchor = hb
+    ? {
+        x: Math.min(hb.left + (last.x + last.w) * display.sx, window.innerWidth - 20),
+        y: hb.top + (last.y + last.h) * display.sy,
+      }
+    : { x: window.innerWidth / 2, y: window.innerHeight / 2 }
+  // 查字模式下, 选中即查, 不再弹划词工具条
+  if (lookupMode.value) {
+    liveSel.value = null
+    selection.value = null
+    void openLookup(text, anchor)
+    return
   }
+  selection.value = { text, page, rects, anchor }
 }
 
 function onScrollerDblClick(e: MouseEvent) {
@@ -4559,6 +4615,12 @@ function runPdfShortcutCommand(command: PdfReaderShortcutCommandId) {
 }
 
 function handleKeydown(e: KeyboardEvent) {
+  // Esc 先关查字卡片, 再交给批注 / 阅读器快捷键
+  if (e.key === 'Escape' && lookupCard.value) {
+    e.preventDefault()
+    closeLookup()
+    return
+  }
   if (handleAnnoKey(e)) return
   dispatchPdfReaderShortcut(e, isMacPlatform, {
     state: {
@@ -4895,6 +4957,18 @@ onBeforeUnmount(() => {
             @click="setAnnoTool(annoTool === 'none' ? 'pen' : 'none')"
           >
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.2 19.8l3.6-.8 9.6-9.7a2 2 0 0 0-2.9-2.9L5 16.2z" /><path d="M13.4 6.4l3.1 3.1" /></svg>
+          </button>
+          <button
+            type="button"
+            class="top-icon top-lookup"
+            :class="{ on: lookupMode }"
+            :title="t('reader.lookupHint')"
+            :aria-label="t('reader.lookup')"
+            :aria-pressed="lookupMode"
+            @click="toggleLookup"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4.5h9.5v15H5z" /><path d="M7.5 8.5h4M7.5 12h4M7.5 15.5h2.5" /><path d="M17.5 14.2c1.5.6 2.2 1.6 2.2 3 0 1.6-1.2 2.6-2.9 2.6" /></svg>
+            <span class="top-lookup-label">{{ t('reader.lookup') }}</span>
           </button>
           <button
             type="button"
@@ -6027,6 +6101,10 @@ onBeforeUnmount(() => {
         <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 4.25h12v11.5H4z" /><path d="M7 7.25h6M7 10h6M7 12.75h3.5" /></svg>
         <span>{{ t('paper.bdUseSelection') }}</span>
       </button>
+      <button type="button" class="sel-act" @click="lookupSelection">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 3.25h9.5v13.5H4z" /><path d="M6.2 6.8h3.6M6.2 9.8h3.6M6.2 12.8h2.2" /><path d="M15.2 12.4c1.2.5 1.8 1.3 1.8 2.4 0 1.3-1 2.1-2.3 2.1" /></svg>
+        <span>{{ t('reader.lookup') }}</span>
+      </button>
       <button type="button" class="sel-act" @click="copySelection">
         <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="6.25" y="6.25" width="9.5" height="9.5" rx="1.75" /><path d="M13.75 6.25v-1.5a1.5 1.5 0 0 0-1.5-1.5h-7.5a1.5 1.5 0 0 0-1.5 1.5v7.5a1.5 1.5 0 0 0 1.5 1.5h1.5" /></svg>
         <span>{{ t('paper.copy') }}</span>
@@ -6035,6 +6113,38 @@ onBeforeUnmount(() => {
       <button type="button" class="sel-close" :aria-label="t('common.close')" :title="t('common.close')" @click="selection = null">
         <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5.75 5.75 8.5 8.5M14.25 5.75l-8.5 8.5" /></svg>
       </button>
+    </div>
+
+    <!-- 查字浮卡: 汉字拼音 + 释义 (本地词典) -->
+    <div
+      v-if="lookupCard"
+      class="hanzi-card card"
+      :style="{ left: `${lookupCard.x}px`, top: `${lookupCard.y}px` }"
+      role="dialog"
+      :aria-label="t('reader.lookupTitle')"
+    >
+      <div class="hanzi-head">
+        <strong>{{ t('reader.lookupTitle') }}</strong>
+        <span class="hanzi-count">{{ lookupCard.entries.length }}{{ t('reader.lookupChars') }}</span>
+        <span style="flex: 1" />
+        <button
+          class="icon-btn"
+          :title="t('common.close')"
+          :aria-label="t('common.close')"
+          @click="closeLookup"
+        >
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M6.3 6.3a1 1 0 0 1 1.4 0L12 10.58l4.3-4.3a1 1 0 1 1 1.4 1.42L13.42 12l4.3 4.3a1 1 0 0 1-1.42 1.4L12 13.42l-4.3 4.3a1 1 0 0 1-1.4-1.42L10.58 12l-4.3-4.3a1 1 0 0 1 0-1.4z"/></svg>
+        </button>
+      </div>
+      <div class="hanzi-list">
+        <div v-for="e in lookupCard.entries" :key="e.char" class="hanzi-item">
+          <div class="hanzi-char-row">
+            <span class="hanzi-char">{{ e.char }}</span>
+            <span class="hanzi-pinyin">{{ e.pinyin || t('reader.lookupNoEntry') }}</span>
+          </div>
+          <p class="hanzi-def">{{ e.def || t('reader.lookupNoEntry') }}</p>
+        </div>
+      </div>
     </div>
 
     <!-- 划词翻译浮卡 (流式) -->
@@ -6620,6 +6730,17 @@ onBeforeUnmount(() => {
   width: 34px;
   height: 34px;
   padding: 0;
+}
+/* 查字按钮: 图标 + 一个「查」字, 比纯图标好认 */
+.top-lookup {
+  width: auto;
+  gap: 4px;
+  padding: 0 8px;
+}
+.top-lookup-label {
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
 }
 .top-icon svg,
 .top-btn svg {
@@ -8161,6 +8282,68 @@ onBeforeUnmount(() => {
 }
 
 /* ---- 划词翻译浮卡 ---- */
+/* ---- 查字浮卡 ---- */
+.hanzi-card {
+  position: fixed;
+  z-index: 72;
+  width: min(300px, calc(100vw - 24px));
+  max-height: min(60vh, 420px);
+  display: flex;
+  flex-direction: column;
+  padding: 10px 12px;
+  border-radius: 10px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);
+}
+.hanzi-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-2);
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+.hanzi-count {
+  font-size: 12px;
+  color: var(--text-3);
+}
+.hanzi-list {
+  overflow: auto;
+  padding-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.hanzi-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.hanzi-char-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.hanzi-char {
+  font-size: 24px;
+  line-height: 1.1;
+  color: var(--text);
+  font-family: var(--font-serif, serif);
+}
+.hanzi-pinyin {
+  font-size: 13px;
+  color: var(--brand);
+  letter-spacing: 0.02em;
+}
+.hanzi-def {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .sel-tr {
   position: fixed;
   z-index: 71;

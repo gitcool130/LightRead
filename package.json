@@ -22,7 +22,6 @@
     "e2e:pdf-anno": "node scripts/e2e-pdf-anno.mjs",
     "e2e:pdf-drawer": "node scripts/e2e-pdf-drawer.mjs",
     "e2e:pdf-reflow": "node scripts/e2e-pdf-reflow.mjs",
-    "e2e:pdf-anno": "node scripts/e2e-pdf-anno.mjs",
     "e2e:convert-epub": "node scripts/e2e-convert-epub.mjs",
     "test:opds-library": "node --experimental-strip-types --test scripts/test-opds-library.mjs",
     "test:native-drop": "node --experimental-strip-types --test scripts/test-native-drop.mjs",
@@ -89,7 +88,9 @@
     "e2e:mobile-booklists": "node scripts/e2e-mobile-booklists.mjs",
     "test:mobile-messages": "node --test scripts/test-mobile-messages.mjs",
     "e2e:mobile-messages": "node scripts/e2e-mobile-messages.mjs",
-    "test:zh-segment-wasm": "node --experimental-strip-types --test scripts/test-zh-segment-wasm.mjs"
+    "test:zh-segment-wasm": "node --experimental-strip-types --test scripts/test-zh-segment-wasm.mjs",
+    "test:hanzi": "node --experimental-strip-types --test scripts/test-hanzi.mjs",
+    "e2e:pdf-lookup": "node scripts/e2e-pdf-lookup.mjs"
   },
   "dependencies": {
     "@embedpdf/pdfium": "^2.14.4",
