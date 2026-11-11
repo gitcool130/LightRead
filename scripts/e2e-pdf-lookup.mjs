@@ -21,6 +21,26 @@ try {
   page.setDefaultTimeout(45000)
   page.on('pageerror', error => errors.push(error.message))
 
+  // 语音合成打桩: 记录被朗读的文本, 不真的出声
+  await page.addInitScript(() => {
+    const spoken = []
+    window.__spoken = spoken
+    class FakeUtterance {
+      constructor(text) { this.text = text }
+    }
+    window.SpeechSynthesisUtterance = FakeUtterance
+    Object.defineProperty(window, 'speechSynthesis', {
+      configurable: true,
+      value: {
+        getVoices: () => [{ name: 'Stub Mandarin', lang: 'zh-CN', voiceURI: 'stub', default: true }],
+        speak: u => { spoken.push(u.text); setTimeout(() => u.onend?.(), 10) },
+        cancel: () => {},
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      },
+    })
+  })
+
   await page.goto(`${base}/#/library`)
   await page.setInputFiles('input[type=file][multiple]', [
     { name: 'hanzi-sample.pdf', mimeType: 'application/pdf', buffer: fixture },
@@ -64,13 +84,22 @@ try {
   // 查字模式下不该再弹划词工具条
   assert.equal(await page.locator('.sel-bar').count(), 0, '查字模式不该同时弹划词工具条')
 
-  // 3. Esc 关闭卡片, 模式仍然开着
+  // 3. 卡片里每个字都能朗读: 点喇叭 → 交给语音合成的应该是那个汉字
+  await page.locator('.hanzi-card .hanzi-speak').first().click()
+  await page.waitForTimeout(400)
+  const spoken = await page.evaluate(() => window.__spoken ?? [])
+  assert.ok(spoken.length >= 1, `点喇叭应触发朗读, 实际: ${JSON.stringify(spoken)}`)
+  assert.match(spoken[0], /^[\u4e00-\u9fff]$/, `朗读内容应是单个汉字: ${spoken[0]}`)
+  const firstChar = await page.locator('.hanzi-card .hanzi-char').first().innerText()
+  assert.equal(spoken[0], firstChar.trim(), '朗读的字应与卡片上第一个字一致')
+
+  // 4. Esc 关闭卡片, 模式仍然开着
   await page.keyboard.press('Escape')
   await page.waitForTimeout(200)
   assert.equal(await page.locator('.hanzi-card').count(), 0, 'Esc 应关闭查字卡')
   assert.equal(await lookupBtn.getAttribute('aria-pressed'), 'true', 'Esc 只关卡片, 不退出查字模式')
 
-  // 4. 关掉查字模式后, 划词工具条里的「查」也能查
+  // 5. 关掉查字模式后, 划词工具条里的「查」也能查
   await lookupBtn.click()
   await page.waitForTimeout(120)
   assert.equal(await lookupBtn.getAttribute('aria-pressed'), 'false')
@@ -81,7 +110,7 @@ try {
   const cardText2 = await page.locator('.hanzi-card').innerText()
   assert.ok(cardText2.includes('乾') || cardText2.includes('彖'), `第二个卡片应列出选区汉字: ${cardText2.slice(0, 80)}`)
 
-  // 5. 回归: 缩放比例菜单开着时, 顶栏 + 必须一次点中 (曾被弹层遮罩吃掉第一次点击)
+  // 6. 回归: 缩放比例菜单开着时, 顶栏 + 必须一次点中 (曾被弹层遮罩吃掉第一次点击)
   const zoomLabel = () => page.locator('.dock-zoom span').first().innerText()
   await page.locator('.dock-zoom').first().click()
   await page.waitForTimeout(250)

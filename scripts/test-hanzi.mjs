@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { isHanziChar, lookupHanzi } from '../src/services/hanzi.ts'
+import { firstReading } from '../src/services/hanziSpeech.ts'
 
 const dictPath = new URL('../src/assets/hanzi-dict.json', import.meta.url)
 const dict = JSON.parse(readFileSync(dictPath, 'utf8'))
@@ -52,4 +53,14 @@ test('lookupHanzi: 词典没有的字标为未收录', async () => {
 test('lookupHanzi: limit 生效', async () => {
   const entries = await lookupHanzi('天地玄黄宇宙洪荒', 3, dict)
   assert.equal(entries.length, 3)
+})
+
+test('firstReading: 多音字取第一个读音', () => {
+  assert.equal(firstReading('háng,xíng'), 'háng')
+  assert.equal(firstReading('qián，gān'), 'qián')
+  assert.equal(firstReading('shì;shí'), 'shì')
+  assert.equal(firstReading('  yáo  '), 'yáo')
+  assert.equal(firstReading('zhǎng/cháng'), 'zhǎng')
+  assert.equal(firstReading(''), '')
+  assert.equal(firstReading(undefined), '')
 })
